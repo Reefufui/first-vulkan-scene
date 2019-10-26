@@ -15,7 +15,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdint>
-#include <set>
+#include <cassert>
 
 #include "vk_utils.h"
 
@@ -67,8 +67,11 @@ private:
   VkPipelineLayout pipelineLayout;
   VkPipeline       graphicsPipeline;
 
-  VkCommandPool commandPool;
+  VkCommandPool                commandPool;
   std::vector<VkCommandBuffer> commandBuffers;
+
+  VkBuffer       m_vbo;     //  
+  VkDeviceMemory m_vboMem;  // we will store our vertices data here
 
   struct SyncObj
   {
@@ -144,6 +147,9 @@ private:
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    CreateVertexBuffer(device, physicalDevice, 6*sizeof(float),
+                       &m_vbo, &m_vboMem);
+
     CreateRenderPass(device, screen.swapChainImageFormat, 
                      &renderPass);
 
@@ -156,6 +162,21 @@ private:
                                 &commandPool, &commandBuffers);
 
     CreateSyncObjects(device, &m_sync);
+
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    float trianglePos[] =
+    {
+      -0.5f, -0.5f,
+      0.5f, -0.5f,
+      0.0f, +0.5f,
+    };
+
+    PutTriangleVerticesToVBO_Now(device, commandPool, graphicsQueue, trianglePos, 6*2,
+                                 m_vbo);
+
   }
 
   void mainLoop()
@@ -170,7 +191,10 @@ private:
   }
 
   void cleanup() 
-  {
+  { 
+    // free our vbo
+    vkFreeMemory(device, m_vboMem, NULL);
+    vkDestroyBuffer(device, m_vbo, NULL);
 
     if (enableValidationLayers)
     {
@@ -448,6 +472,91 @@ private:
       }
     }
   }
+
+  static void CreateVertexBuffer(VkDevice a_device, VkPhysicalDevice a_physDevice, const size_t a_bufferSize,
+                                 VkBuffer *a_pBuffer, VkDeviceMemory *a_pBufferMemory)
+  {
+   
+    VkBufferCreateInfo bufferCreateInfo = {};
+    bufferCreateInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferCreateInfo.pNext       = nullptr;
+    bufferCreateInfo.size        = a_bufferSize;                         
+    bufferCreateInfo.usage       = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;            
+
+    VK_CHECK_RESULT(vkCreateBuffer(a_device, &bufferCreateInfo, NULL, a_pBuffer)); // create bufferStaging.
+
+                
+    VkMemoryRequirements memoryRequirements;
+    vkGetBufferMemoryRequirements(a_device, (*a_pBuffer), &memoryRequirements);
+
+
+    VkMemoryAllocateInfo allocateInfo = {};
+    allocateInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocateInfo.pNext           = nullptr;
+    allocateInfo.allocationSize  = memoryRequirements.size; // specify required memory.
+    allocateInfo.memoryTypeIndex = vk_utils::FindMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, a_physDevice); // #NOTE VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+
+    VK_CHECK_RESULT(vkAllocateMemory(a_device, &allocateInfo, NULL, a_pBufferMemory));   // allocate memory on device.
+
+    VK_CHECK_RESULT(vkBindBufferMemory(a_device, (*a_pBuffer), (*a_pBufferMemory), 0));  // Now associate that allocated memory with the bufferStaging. With that, the bufferStaging is backed by actual memory.
+  }
+
+  static void RunCommandBuffer(VkCommandBuffer a_cmdBuff, VkQueue a_queue, VkDevice a_device)
+  {
+    // Now we shall finally submit the recorded command bufferStaging to a queue.
+    //
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1; // submit a single command bufferStaging
+    submitInfo.pCommandBuffers    = &a_cmdBuff; // the command bufferStaging to submit.
+                                         
+    VkFence fence;
+    VkFenceCreateInfo fenceCreateInfo = {};
+    fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceCreateInfo.flags = 0;
+    VK_CHECK_RESULT(vkCreateFence(a_device, &fenceCreateInfo, NULL, &fence));
+
+    // We submit the command bufferStaging on the queue, at the same time giving a fence.
+    //
+    VK_CHECK_RESULT(vkQueueSubmit(a_queue, 1, &submitInfo, fence));
+
+    // The command will not have finished executing until the fence is signalled.
+    // So we wait here. We will directly after this read our bufferStaging from the GPU,
+    // and we will not be sure that the command has finished executing unless we wait for the fence.
+    // Hence, we use a fence here.
+    //
+    VK_CHECK_RESULT(vkWaitForFences(a_device, 1, &fence, VK_TRUE, 100000000000));
+
+    vkDestroyFence(a_device, fence, NULL);
+  }
+
+  static void PutTriangleVerticesToVBO_Now(VkDevice a_device, VkCommandPool a_pool, VkQueue a_queue, float* a_triPos, int a_floatsNum,
+                                           VkBuffer a_buffer)
+  {
+    VkCommandBufferAllocateInfo allocInfo = {};
+    allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool        = a_pool;
+    allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer cmdBuff;
+    if (vkAllocateCommandBuffers(a_device, &allocInfo, &cmdBuff) != VK_SUCCESS)
+      throw std::runtime_error("[PutTriangleVerticesToVBO_Now]: failed to allocate command buffer!");
+
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; // the bufferStaging is only submitted and used once in this application.
+    
+    vkBeginCommandBuffer(cmdBuff, &beginInfo); // start recording commands.
+    vkCmdUpdateBuffer   (cmdBuff, a_buffer, 0, a_floatsNum * sizeof(float), a_triPos);
+    vkEndCommandBuffer  (cmdBuff);
+
+    RunCommandBuffer(cmdBuff, a_queue, a_device);
+
+    vkFreeCommandBuffers(a_device, a_pool, 1, &cmdBuff);
+  }
+
 
   void DrawFrame() 
   {
