@@ -10,9 +10,18 @@
 
 #include <cmath>
 
-VkInstance vk_utils::CreateInstance(bool a_enableValidationLayers, std::vector<const char *>& a_enabledLayers)
+static const char* g_validationLayerData = "VK_LAYER_LUNARG_standard_validation";
+static const char* g_debugReportExtName  = VK_EXT_DEBUG_REPORT_EXTENSION_NAME;
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+VkInstance vk_utils::CreateInstance(bool a_enableValidationLayers, std::vector<const char *>& a_enabledLayers, std::vector<const char *> a_extentions)
 {
-  std::vector<const char *> enabledExtensions;
+  std::vector<const char *> enabledExtensions = a_extentions;
 
   /*
   By enabling validation layers, Vulkan will emit warnings if the API
@@ -46,7 +55,7 @@ VkInstance vk_utils::CreateInstance(bool a_enableValidationLayers, std::vector<c
     if (!foundLayer)
       RUN_TIME_ERROR("Layer VK_LAYER_LUNARG_standard_validation not supported\n");
 
-    a_enabledLayers.push_back("VK_LAYER_LUNARG_standard_validation"); // Alright, we can use this layer.
+    a_enabledLayers.push_back(g_validationLayerData); // Alright, we can use this layer.
 
     /*
     We need to enable an extension named VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
@@ -54,7 +63,6 @@ VkInstance vk_utils::CreateInstance(bool a_enableValidationLayers, std::vector<c
 
     So again, we just check if the extension is among the supported extensions.
     */
-
     uint32_t extensionCount;
 
     vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, NULL);
@@ -73,7 +81,7 @@ VkInstance vk_utils::CreateInstance(bool a_enableValidationLayers, std::vector<c
     if (!foundExtension)
       RUN_TIME_ERROR("Extension VK_EXT_DEBUG_REPORT_EXTENSION_NAME not supported\n");
 
-    enabledExtensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+    enabledExtensions.push_back(g_debugReportExtName);
   }
 
   /*
@@ -90,7 +98,7 @@ VkInstance vk_utils::CreateInstance(bool a_enableValidationLayers, std::vector<c
   applicationInfo.applicationVersion = 0;
   applicationInfo.pEngineName        = "awesomeengine";
   applicationInfo.engineVersion      = 0;
-  applicationInfo.apiVersion         = VK_API_VERSION_1_0;;
+  applicationInfo.apiVersion         = VK_API_VERSION_1_0;
 
   VkInstanceCreateInfo createInfo = {};
   createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -218,15 +226,20 @@ VkPhysicalDevice vk_utils::FindPhysicalDevice(VkInstance a_instance, bool a_prin
   return physicalDevice;
 }
 
-uint32_t vk_utils::GetComputeQueueFamilyIndex(VkPhysicalDevice physicalDevice)
+uint32_t vk_utils::GetComputeQueueFamilyIndex(VkPhysicalDevice a_physicalDevice)
+{
+  return vk_utils::GetQueueFamilyIndex(a_physicalDevice, VK_QUEUE_COMPUTE_BIT);
+}
+
+uint32_t vk_utils::GetQueueFamilyIndex(VkPhysicalDevice a_physicalDevice, VkQueueFlagBits a_bits)
 {
   uint32_t queueFamilyCount;
 
-  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, NULL);
+  vkGetPhysicalDeviceQueueFamilyProperties(a_physicalDevice, &queueFamilyCount, NULL);
 
   // Retrieve all queue families.
   std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies.data());
+  vkGetPhysicalDeviceQueueFamilyProperties(a_physicalDevice, &queueFamilyCount, queueFamilies.data());
 
   // Now find a family that supports compute.
   uint32_t i = 0;
@@ -234,48 +247,44 @@ uint32_t vk_utils::GetComputeQueueFamilyIndex(VkPhysicalDevice physicalDevice)
   {
     VkQueueFamilyProperties props = queueFamilies[i];
 
-    if (props.queueCount > 0 && (props.queueFlags & VK_QUEUE_COMPUTE_BIT))
-    {
-      // found a queue with compute. We're done!
+    if (props.queueCount > 0 && (props.queueFlags & a_bits))  // found a queue with compute. We're done!
       break;
-    }
   }
 
   if (i == queueFamilies.size())
-    RUN_TIME_ERROR("could not find a queue family that supports operations");
+    RUN_TIME_ERROR(" vk_utils::GetComputeQueueFamilyIndex: could not find a queue family that supports operations");
 
   return i;
 }
 
 
-VkDevice vk_utils::CreateLogicalDevice(uint32_t queueFamilyIndex, VkPhysicalDevice physicalDevice, const std::vector<const char *>& a_enabledLayers)
+VkDevice vk_utils::CreateLogicalDevice(uint32_t queueFamilyIndex, VkPhysicalDevice physicalDevice, const std::vector<const char *>& a_enabledLayers, std::vector<const char *> a_extentions)
 {
-
-  /*
-  When creating the device, we also specify what queues it has.
-  */
+  // When creating the device, we also specify what queues it has.
+  //
   VkDeviceQueueCreateInfo queueCreateInfo = {};
   queueCreateInfo.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
   queueCreateInfo.queueFamilyIndex = queueFamilyIndex;
-  queueCreateInfo.queueCount       = 1; // create one queue in this family. We don't need more.
+  queueCreateInfo.queueCount       = 1;    // create one queue in this family. We don't need more.
   float queuePriorities            = 1.0;  // we only have one queue, so this is not that imporant.
   queueCreateInfo.pQueuePriorities = &queuePriorities;
 
-  /*
-  Now we create the logical device. The logical device allows us to interact with the physical
-  device.
-  */
+  // Now we create the logical device. The logical device allows us to interact with the physical device.
+  //
   VkDeviceCreateInfo deviceCreateInfo = {};
 
   // Specify any desired device features here. We do not need any for this application, though.
+  //
   VkPhysicalDeviceFeatures deviceFeatures = {};
 
   deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   deviceCreateInfo.enabledLayerCount    = a_enabledLayers.size();  // need to specify validation layers here as well.
   deviceCreateInfo.ppEnabledLayerNames  = a_enabledLayers.data();
-  deviceCreateInfo.pQueueCreateInfos    = &queueCreateInfo; // when creating the logical device, we also specify what queues it has.
+  deviceCreateInfo.pQueueCreateInfos    = &queueCreateInfo;        // when creating the logical device, we also specify what queues it has.
   deviceCreateInfo.queueCreateInfoCount = 1;
   deviceCreateInfo.pEnabledFeatures     = &deviceFeatures;
+  deviceCreateInfo.enabledExtensionCount   = static_cast<uint32_t>(a_extentions.size());
+  deviceCreateInfo.ppEnabledExtensionNames = a_extentions.data();
 
   VkDevice device;
   VK_CHECK_RESULT(vkCreateDevice(physicalDevice, &deviceCreateInfo, NULL, &device)); // create logical device.
