@@ -158,7 +158,7 @@ private:
   
     CreateScreenFrameBuffers(device, renderPass, &screen);
     
-    CreateCommandPoolAndBuffers(device, physicalDevice, screen.swapChainFramebuffers, screen.swapChainExtent, renderPass, graphicsPipeline,
+    CreateCommandPoolAndBuffers(device, physicalDevice, screen.swapChainFramebuffers, screen.swapChainExtent, renderPass, graphicsPipeline, m_vbo,
                                 &commandPool, &commandBuffers);
 
     CreateSyncObjects(device, &m_sync);
@@ -303,14 +303,28 @@ private:
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
+
+    VkVertexInputBindingDescription vInputBinding = { };
+    vInputBinding.binding   = 0;
+    vInputBinding.stride    = sizeof(float) * 2;
+    vInputBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription vAttribute = {};
+    vAttribute.binding  = 0;
+    vAttribute.location = 0;
+    vAttribute.format   = VK_FORMAT_R32G32_SFLOAT;
+    vAttribute.offset   = 0;
+
     VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 0;
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
-
+    vertexInputInfo.vertexBindingDescriptionCount   = 1;
+    vertexInputInfo.vertexAttributeDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions      = &vInputBinding;
+    vertexInputInfo.pVertexAttributeDescriptions    = &vAttribute;
+    
     VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology               = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
     VkViewport viewport = {};
@@ -394,7 +408,7 @@ private:
 
 
   static void CreateCommandPoolAndBuffers(VkDevice a_device, VkPhysicalDevice a_physDevice, std::vector<VkFramebuffer> a_swapChainFramebuffers, VkExtent2D a_frameBufferExtent, 
-                                          VkRenderPass a_renderPass, VkPipeline a_graphicsPipeline,
+                                          VkRenderPass a_renderPass, VkPipeline a_graphicsPipeline, VkBuffer a_vPosBuffer,
                                           VkCommandPool* a_cmdPool, std::vector<VkCommandBuffer>* a_cmdBuffers) 
   {
     std::vector<VkCommandBuffer>& commandBuffers = (*a_cmdBuffers);
@@ -439,6 +453,13 @@ private:
       vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
       vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, a_graphicsPipeline);
+
+      // say we want to take vertices pos from a_vPosBuffer
+      {
+        VkBuffer vertexBuffers[] = { a_vPosBuffer };
+        VkDeviceSize offsets[]   = { 0 };
+        vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
+      }
 
       vkCmdDraw(commandBuffers[i], 3, 1, 0, 0);
 
