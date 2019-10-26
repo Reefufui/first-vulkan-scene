@@ -552,6 +552,8 @@ private:
     vkDestroyFence(a_device, fence, NULL);
   }
 
+  // An example function that immediately copy vertex data to GPU
+  //
   static void PutTriangleVerticesToVBO_Now(VkDevice a_device, VkCommandPool a_pool, VkQueue a_queue, float* a_triPos, int a_floatsNum,
                                            VkBuffer a_buffer)
   {
@@ -567,9 +569,9 @@ private:
 
     VkCommandBufferBeginInfo beginInfo = {};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; // the bufferStaging is only submitted and used once in this application.
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; 
     
-    vkBeginCommandBuffer(cmdBuff, &beginInfo); // start recording commands.
+    vkBeginCommandBuffer(cmdBuff, &beginInfo);
     vkCmdUpdateBuffer   (cmdBuff, a_buffer, 0, a_floatsNum * sizeof(float), a_triPos);
     vkEndCommandBuffer  (cmdBuff);
 
