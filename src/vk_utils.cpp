@@ -370,6 +370,20 @@ std::vector<uint32_t> vk_utils::ReadFile(const char* filename)
   return resData;
 }
 
+VkShaderModule vk_utils::CreateShaderModule(VkDevice a_device, const std::vector<uint32_t>& code)
+{
+  VkShaderModuleCreateInfo createInfo = {};
+  createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  createInfo.codeSize = code.size() * sizeof(uint32_t);
+  createInfo.pCode = code.data();
+
+  VkShaderModule shaderModule;
+  if (vkCreateShaderModule(a_device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
+    throw std::runtime_error("[CreateShaderModule]: failed to create shader module!");
+
+  return shaderModule;
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -486,4 +500,54 @@ void vk_utils::CreateCwapChain(VkPhysicalDevice a_physDevice, VkDevice a_device,
   a_buff->swapChainImageFormat = surfaceFormat.format;
   a_buff->swapChainExtent      = extent;
 }
+
+void vk_utils::CreateScreenImageViews(VkDevice a_device, ScreenBufferResources* pScreen)
+{
+  pScreen->swapChainImageViews.resize(pScreen->swapChainImages.size());
+
+  for (size_t i = 0; i < pScreen->swapChainImages.size(); i++)
+  {
+    VkImageViewCreateInfo createInfo = {};
+    createInfo.sType        = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    createInfo.image        = pScreen->swapChainImages[i];
+    createInfo.viewType     = VK_IMAGE_VIEW_TYPE_2D;
+    createInfo.format       = pScreen->swapChainImageFormat;
+    createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    createInfo.subresourceRange.baseMipLevel   = 0;
+    createInfo.subresourceRange.levelCount     = 1;
+    createInfo.subresourceRange.baseArrayLayer = 0;
+    createInfo.subresourceRange.layerCount     = 1;
+
+    if (vkCreateImageView(a_device, &createInfo, nullptr, &pScreen->swapChainImageViews[i]) != VK_SUCCESS)
+      throw std::runtime_error("[vk_utils::CreateImageViews]: failed to create image views!");
+  }
+
+}
+
+void vk_utils::CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, ScreenBufferResources* pScreen)
+{
+  pScreen->swapChainFramebuffers.resize(pScreen->swapChainImageViews.size());
+
+  for (size_t i = 0; i < pScreen->swapChainImageViews.size(); i++) 
+  {
+    VkImageView attachments[] = { pScreen->swapChainImageViews[i] };
+
+    VkFramebufferCreateInfo framebufferInfo = {};
+    framebufferInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    framebufferInfo.renderPass      = a_renderPass;
+    framebufferInfo.attachmentCount = 1;
+    framebufferInfo.pAttachments    = attachments;
+    framebufferInfo.width           = pScreen->swapChainExtent.width;
+    framebufferInfo.height          = pScreen->swapChainExtent.height;
+    framebufferInfo.layers          = 1;
+
+    if (vkCreateFramebuffer(a_device, &framebufferInfo, nullptr, &pScreen->swapChainFramebuffers[i]) != VK_SUCCESS)
+      throw std::runtime_error("failed to create framebuffer!");
+  }
+}
+
 
