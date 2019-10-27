@@ -40,10 +40,14 @@ public:
 
   void run() 
   {
-    initWindow();
-    initVulkan();
-    mainLoop();
-    cleanup();
+    InitWindow();
+    
+    InitVulkan();
+    CreateResources();
+
+    MainLoop();
+
+    Cleanup();
   }
 
 private:
@@ -82,7 +86,7 @@ private:
 
   size_t currentFrame = 0;
 
-  void initWindow() 
+  void InitWindow() 
   {
     glfwInit();
 
@@ -108,7 +112,7 @@ private:
   VkDebugReportCallbackEXT debugReportCallback;
   
 
-  void initVulkan() 
+  void InitVulkan() 
   {
     const int deviceId = 0;
 
@@ -139,16 +143,26 @@ private:
     vkGetDeviceQueue(device, queueFID, 0, &graphicsQueue);
     vkGetDeviceQueue(device, queueFID, 0, &presentQueue);
     
+    // ==> commadnPool
+    {
+      VkCommandPoolCreateInfo poolInfo = {};
+      poolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+      poolInfo.queueFamilyIndex = vk_utils::GetQueueFamilyIndex(physicalDevice, VK_QUEUE_GRAPHICS_BIT);
+
+      if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS)
+        throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to create command pool!");
+    }
+
     vk_utils::CreateCwapChain(physicalDevice, device, surface, WIDTH, HEIGHT,
                               &screen);
 
     vk_utils::CreateScreenImageViews(device, &screen);
+  }
 
+  void CreateResources()
+  {
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-    CreateVertexBuffer(device, physicalDevice, 6*sizeof(float),
-                       &m_vbo, &m_vboMem);
 
     CreateRenderPass(device, screen.swapChainImageFormat, 
                      &renderPass);
@@ -157,16 +171,18 @@ private:
                            &pipelineLayout, &graphicsPipeline);
   
     CreateScreenFrameBuffers(device, renderPass, &screen);
-    
-    CreateCommandPoolAndBuffers(device, physicalDevice, screen.swapChainFramebuffers, screen.swapChainExtent, renderPass, graphicsPipeline, m_vbo,
-                                &commandPool, &commandBuffers);
+
+    CreateVertexBuffer(device, physicalDevice, 6 * sizeof(float),
+                       &m_vbo, &m_vboMem);
+
+    CreateAndWriteCommandBuffers(device, commandPool, screen.swapChainFramebuffers, screen.swapChainExtent, renderPass, graphicsPipeline, m_vbo,
+                                 &commandBuffers);
 
     CreateSyncObjects(device, &m_sync);
 
-
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
+   
+    // put our vertices to GPU
+    //
     float trianglePos[] =
     {
       -0.5f, -0.5f,
@@ -176,10 +192,10 @@ private:
 
     PutTriangleVerticesToVBO_Now(device, commandPool, graphicsQueue, trianglePos, 6*2,
                                  m_vbo);
-
   }
 
-  void mainLoop()
+
+  void MainLoop()
   {
     while (!glfwWindowShouldClose(window)) 
     {
@@ -190,7 +206,7 @@ private:
     vkDeviceWaitIdle(device);
   }
 
-  void cleanup() 
+  void Cleanup() 
   { 
     // free our vbo
     vkFreeMemory(device, m_vboMem, NULL);
@@ -407,24 +423,17 @@ private:
   }
 
 
-  static void CreateCommandPoolAndBuffers(VkDevice a_device, VkPhysicalDevice a_physDevice, std::vector<VkFramebuffer> a_swapChainFramebuffers, VkExtent2D a_frameBufferExtent, 
-                                          VkRenderPass a_renderPass, VkPipeline a_graphicsPipeline, VkBuffer a_vPosBuffer,
-                                          VkCommandPool* a_cmdPool, std::vector<VkCommandBuffer>* a_cmdBuffers) 
+  static void CreateAndWriteCommandBuffers(VkDevice a_device, VkCommandPool a_cmdPool, std::vector<VkFramebuffer> a_swapChainFramebuffers, VkExtent2D a_frameBufferExtent,
+                                           VkRenderPass a_renderPass, VkPipeline a_graphicsPipeline, VkBuffer a_vPosBuffer,
+                                           std::vector<VkCommandBuffer>* a_cmdBuffers) 
   {
     std::vector<VkCommandBuffer>& commandBuffers = (*a_cmdBuffers);
-
-    VkCommandPoolCreateInfo poolInfo = {};
-    poolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.queueFamilyIndex = vk_utils::GetQueueFamilyIndex(a_physDevice, VK_QUEUE_GRAPHICS_BIT);
-
-    if (vkCreateCommandPool(a_device, &poolInfo, nullptr, a_cmdPool) != VK_SUCCESS)
-      throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to create command pool!");
 
     commandBuffers.resize(a_swapChainFramebuffers.size());
 
     VkCommandBufferAllocateInfo allocInfo = {};
     allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.commandPool        = (*a_cmdPool);
+    allocInfo.commandPool        = a_cmdPool;
     allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
 
