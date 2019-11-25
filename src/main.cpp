@@ -172,7 +172,7 @@ private:
   
     CreateScreenFrameBuffers(device, renderPass, &screen);
 
-    CreateVertexBuffer(device, physicalDevice, 6 * sizeof(float),
+    CreateVertexBuffer(device, physicalDevice, 6*2*sizeof(float),
                        &m_vbo, &m_vboMem);
 
     CreateAndWriteCommandBuffers(device, commandPool, screen.swapChainFramebuffers, screen.swapChainExtent, renderPass, graphicsPipeline, m_vbo,
