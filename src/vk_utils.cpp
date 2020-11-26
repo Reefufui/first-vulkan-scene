@@ -16,7 +16,7 @@
 #undef max
 #endif 
 
-static const char* g_validationLayerData = "VK_LAYER_LUNARG_standard_validation";
+char g_validationLayerData[256];
 static const char* g_debugReportExtName  = VK_EXT_DEBUG_REPORT_EXTENSION_NAME;
 
 
@@ -49,9 +49,13 @@ VkInstance vk_utils::CreateInstance(bool a_enableValidationLayers, std::vector<c
     And then we simply check if VK_LAYER_LUNARG_standard_validation is among the supported layers.
     */
     bool foundLayer = false;
-    for (VkLayerProperties prop : layerProperties) {
-
-      if (strcmp("VK_LAYER_LUNARG_standard_validation", prop.layerName) == 0) {
+    for (VkLayerProperties prop : layerProperties) 
+    {
+      std::cout << prop.layerName <<std::endl;
+      if (strcmp("VK_LAYER_LUNARG_standard_validation", prop.layerName) == 0 || 
+          strcmp("VK_LAYER_KHRONOS_validation", prop.layerName) == 0) 
+      {
+        strncpy(g_validationLayerData, prop.layerName, 256);
         foundLayer = true;
         break;
       }
