@@ -62,7 +62,7 @@ namespace vk_utils
 
   std::vector<uint32_t> ReadFile(const char* filename);
   VkShaderModule CreateShaderModule(VkDevice a_device, const std::vector<uint32_t>& code);
-};
+}
 
 #undef  RUN_TIME_ERROR
 #undef  RUN_TIME_ERROR_AT

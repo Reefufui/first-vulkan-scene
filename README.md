@@ -1,6 +1,4 @@
 # vulkan_graphics_step1
-Hello Triangle with Vulkan
-![](image.png)
 
 Please none that this sample in fact contains 2 samples: 
 
