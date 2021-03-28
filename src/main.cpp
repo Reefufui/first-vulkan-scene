@@ -1,6 +1,11 @@
 #define GLFW_INCLUDE_VULKAN
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+
 #include "GLFW/glfw3.h"
 #include "glm/glm.hpp"
+#include "tiny_gltf.h"
 
 #include <vulkan/vulkan.h>
 

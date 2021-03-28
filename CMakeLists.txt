@@ -16,7 +16,8 @@ find_package(glfw3 REQUIRED)
 set(ALL_LIBS ${ALL_LIBS} ${GLFW_LIBRARIES} )
 
 include_directories(${GLFW_INCLUDE_DIRS}
-    src/vendor/glm)
+    src/vendor/glm
+    src/vendor/tinygltf)
 
 #uncomment this to detect broken memory problems via gcc sanitizers
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fsanitize=leak -fsanitize=undefined -fsanitize=bounds-strict")
