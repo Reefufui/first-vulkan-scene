@@ -1,3 +1,6 @@
 [submodule "src/vendor/glm"]
 	path = src/vendor/glm
 	url = https://github.com/g-truc/glm.git
+[submodule "src/vendor/tinygltf"]
+	path = src/vendor/tinygltf
+	url = https://github.com/syoyo/tinygltf.git
