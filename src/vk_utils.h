@@ -26,11 +26,10 @@ namespace vk_utils
 
   static void RunTimeError(const char* file, int line, const char* msg)
   {
-    std::stringstream strout;
-    strout << "runtime_error at " << file << ", line " << line << ": " << msg << std::endl;
-    throw std::runtime_error(strout.str().c_str());
+      std::stringstream strout;
+      strout << "runtime_error at " << file << ", line " << line << ": " << msg << std::endl;
+      throw std::runtime_error(strout.str().c_str());
   }
-
 
   VkInstance CreateInstance(bool a_enableValidationLayers, std::vector<const char *>& a_enabledLayers, std::vector<const char *> a_extentions = std::vector<const char *>());
   void       InitDebugReportCallback(VkInstance a_instance, DebugReportCallbackFuncType a_callback, VkDebugReportCallbackEXT* a_debugReportCallback);
@@ -45,24 +44,22 @@ namespace vk_utils
   //
   struct ScreenBufferResources
   {
-    VkSwapchainKHR             swapChain;
-    std::vector<VkImage>       swapChainImages;
-    VkFormat                   swapChainImageFormat;
-    VkExtent2D                 swapChainExtent;
-    std::vector<VkImageView>   swapChainImageViews;
-    std::vector<VkFramebuffer> swapChainFramebuffers;
+      VkSwapchainKHR             swapChain;
+      std::vector<VkImage>       swapChainImages;
+      VkFormat                   swapChainImageFormat;
+      VkExtent2D                 swapChainExtent;
+      std::vector<VkImageView>   swapChainImageViews;
+      std::vector<VkFramebuffer> swapChainFramebuffers;
   };
 
   void CreateCwapChain(VkPhysicalDevice a_physDevice, VkDevice a_device, VkSurfaceKHR a_surface, int a_width, int a_height,
-                       ScreenBufferResources* a_buff);
+          ScreenBufferResources* a_buff);
 
   void CreateScreenImageViews(VkDevice a_device, ScreenBufferResources* pScreen);
 
-  void CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, ScreenBufferResources* pScreen);
-
   std::vector<uint32_t> ReadFile(const char* filename);
   VkShaderModule CreateShaderModule(VkDevice a_device, const std::vector<uint32_t>& code);
-};
+}
 
 #undef  RUN_TIME_ERROR
 #undef  RUN_TIME_ERROR_AT
