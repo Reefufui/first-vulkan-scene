@@ -520,26 +520,3 @@ void vk_utils::CreateScreenImageViews(VkDevice a_device, ScreenBufferResources* 
 
 }
 
-void vk_utils::CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, ScreenBufferResources* pScreen)
-{
-    pScreen->swapChainFramebuffers.resize(pScreen->swapChainImageViews.size());
-
-    for (size_t i = 0; i < pScreen->swapChainImageViews.size(); i++) 
-    {
-        VkImageView attachments[] = { pScreen->swapChainImageViews[i] };
-
-        VkFramebufferCreateInfo framebufferInfo = {};
-        framebufferInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass      = a_renderPass;
-        framebufferInfo.attachmentCount = 1;
-        framebufferInfo.pAttachments    = attachments;
-        framebufferInfo.width           = pScreen->swapChainExtent.width;
-        framebufferInfo.height          = pScreen->swapChainExtent.height;
-        framebufferInfo.layers          = 1;
-
-        if (vkCreateFramebuffer(a_device, &framebufferInfo, nullptr, &pScreen->swapChainFramebuffers[i]) != VK_SUCCESS)
-            throw std::runtime_error("failed to create framebuffer!");
-    }
-}
-
-

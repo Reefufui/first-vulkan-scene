@@ -57,8 +57,6 @@ namespace vk_utils
 
   void CreateScreenImageViews(VkDevice a_device, ScreenBufferResources* pScreen);
 
-  void CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, ScreenBufferResources* pScreen);
-
   std::vector<uint32_t> ReadFile(const char* filename);
   VkShaderModule CreateShaderModule(VkDevice a_device, const std::vector<uint32_t>& code);
 }

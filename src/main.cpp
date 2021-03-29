@@ -1,11 +1,12 @@
 #define GLFW_INCLUDE_VULKAN
-#define TINYGLTF_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 
-#include "GLFW/glfw3.h"
-#include "glm/glm.hpp"
-#include "tiny_gltf.h"
+#include <GLFW/glfw3.h>
+#include <glm/vec3.hpp> // glm::vec3
+#include <glm/vec4.hpp> // glm::vec4
+#include <glm/mat4x4.hpp> // glm::mat4
+#include <glm/ext/matrix_transform.hpp> // glm::translate, glm::rotate, glm::scale
+#include <glm/ext/matrix_clip_space.hpp> // glm::perspective
+#include <glm/ext/scalar_constants.hpp> // glm::pi
 
 #include <vulkan/vulkan.h>
 
@@ -20,6 +21,7 @@
 #include <cassert>
 
 #include "vk_utils.h"
+#include "Mesh.hpp"
 
 const int WIDTH  = 800;
 const int HEIGHT = 600;
@@ -62,8 +64,14 @@ class HelloTriangleApplication
         VkCommandPool                m_commandPool;
         std::vector<VkCommandBuffer> m_commandBuffers;
 
+        // buffers
         VkBuffer       m_vbo, m_ibo;
         VkDeviceMemory m_vboMem, m_iboMem;
+
+        //images
+        VkImage        m_depthImage;
+        VkDeviceMemory m_depthImageMemory;
+        VkImageView    m_depthImageView;
 
         struct SyncObj
         {
@@ -72,7 +80,11 @@ class HelloTriangleApplication
             std::vector<VkFence>     inFlightFences;
         } m_sync;
 
-        size_t m_currentFrame = 0;
+        size_t m_currentFrame{};
+        unsigned m_frameNumber{};
+
+        // Meshes
+        std::vector<Mesh> m_meshes{};
 
         void InitWindow() 
         {
@@ -135,48 +147,59 @@ class HelloTriangleApplication
             {
                 VkCommandPoolCreateInfo poolInfo{};
                 poolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+                poolInfo.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
                 poolInfo.queueFamilyIndex = vk_utils::GetQueueFamilyIndex(physicalDevice, VK_QUEUE_GRAPHICS_BIT);
 
                 if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_commandPool) != VK_SUCCESS)
                     throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to create command pool!");
             }
 
-            vk_utils::CreateCwapChain(physicalDevice, m_device, m_surface, WIDTH, HEIGHT,
-                    &m_screen);
+            vk_utils::CreateCwapChain(physicalDevice, m_device, m_surface, WIDTH, HEIGHT, &m_screen);
 
             vk_utils::CreateScreenImageViews(m_device, &m_screen);
         }
 
+        static void LoadMesh(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue, Mesh& a_mesh, std::string a_filename)
+        {
+            a_mesh.loadFromOBJ(a_filename.c_str());
+
+            //TODO: vertex normals
+
+            CreateVertexBuffer(a_device, a_physDevice, a_mesh.vertices.size() * sizeof(Vertex), &a_mesh.getVBO().buffer, &a_mesh.getVBO().memory);
+            PutDataToBuffer(a_device, a_pool, a_queue, (uint32_t*)a_mesh.vertices.data(), a_mesh.vertices.size() * sizeof(Vertex), a_mesh.getVBO().buffer);
+        }
+
         void CreateResources()
         {
+            std::cout << "\tcreating render pass...\n";
             CreateRenderPass(m_device, m_screen.swapChainImageFormat, &m_renderPass);
 
+            std::cout << "\tcreating graphics pipeline...\n";
             CreateGraphicsPipeline(m_device, m_screen.swapChainExtent, m_renderPass, &m_pipelineLayout, &m_graphicsPipeline);
 
-            CreateScreenFrameBuffers(m_device, m_renderPass, &m_screen);
+            std::cout << "\tcreating depth image...\n";
+            CreateDepthImage(m_device, physicalDevice, m_depthImage, m_depthImageMemory, m_depthImageView);
 
-            CreateVertexBuffer(m_device, physicalDevice, 4 * 3 * sizeof(float), &m_vbo, &m_vboMem);
-            CreateIndexBuffer(m_device, physicalDevice, 3 * 2 * sizeof(uint32_t), &m_ibo, &m_iboMem);
+            std::cout << "\tcreating frame buffers...\n";
+            CreateScreenFrameBuffers(m_device, m_renderPass, &m_screen, m_depthImageView);
 
-            CreateAndWriteCommandBuffers(m_device, m_commandPool, m_screen.swapChainFramebuffers, m_screen.swapChainExtent, m_renderPass, m_graphicsPipeline,
-                    m_vbo, m_ibo, &m_commandBuffers);
-
+            std::cout << "\tcreating sync objects...\n";
             CreateSyncObjects(m_device, &m_sync);
 
-            const std::vector<float> groundPos {
-                -1.0f, -1.0f, +0.0f, +1.0f,
-                +1.0f, -1.0f, +0.0f, +1.0f,
-                -1.0f, +1.0f, +0.0f, +1.0f,
-                +1.0f, +1.0f, +0.0f, +1.0f
+            std::cout << "\tloading meshes...\n";
+
+            std::vector<std::string> filenames{
+                "assets/models/monkey.obj"
             };
 
-            const std::vector<uint32_t> groundPosIndexes {
-                0, 1, 2,
-                3, 2, 1
-            };
+            for (auto filename : filenames)
+            {
+                m_meshes.push_back(Mesh());
+                LoadMesh(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_meshes.back(), filename);
+            }
 
-            PutDataToBuffer(m_device, m_commandPool, m_graphicsQueue, (uint32_t*) groundPos.data(), 4 * groundPos.size(),        m_vbo);
-            PutDataToBuffer(m_device, m_commandPool, m_graphicsQueue, groundPosIndexes.data(),      4 * groundPosIndexes.size(), m_ibo);
+            std::cout << "\tcreating command buffers...\n";
+            CreateCommandBuffers(m_device, m_commandPool, m_screen.swapChainFramebuffers, &m_commandBuffers);
         }
 
 
@@ -193,13 +216,17 @@ class HelloTriangleApplication
 
         void Cleanup() 
         { 
-            // free our vbo
-            vkFreeMemory(m_device, m_vboMem, NULL);
-            vkDestroyBuffer(m_device, m_vbo, NULL);
+            // free our meshes
+            for (auto mesh : m_meshes)
+            {
+                mesh.setDevice(m_device);
+                mesh.cleanup();
+            }
 
-            // free out ibo
-            vkFreeMemory(m_device, m_iboMem, NULL);
-            vkDestroyBuffer(m_device, m_ibo, NULL);
+            // free depth image resources
+            vkFreeMemory      (m_device, m_depthImageMemory, NULL);
+            vkDestroyImage    (m_device, m_depthImage,       NULL);
+            vkDestroyImageView(m_device, m_depthImageView,   NULL);
 
             if (enableValidationLayers)
             {
@@ -259,10 +286,25 @@ class HelloTriangleApplication
             colorAttachmentRef.attachment = 0;
             colorAttachmentRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+            VkAttachmentDescription depthAttachment{};
+            depthAttachment.format         = VK_FORMAT_D32_SFLOAT;
+            depthAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
+            depthAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depthAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+            depthAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            depthAttachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+            depthAttachment.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+            VkAttachmentReference depthAttachmentRef{};
+            depthAttachmentRef.attachment = 1;
+            depthAttachmentRef.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
             VkSubpassDescription subpass {};
-            subpass.pipelineBindPoint     = VK_PIPELINE_BIND_POINT_GRAPHICS;
-            subpass.colorAttachmentCount  = 1;
-            subpass.pColorAttachments     = &colorAttachmentRef;
+            subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            subpass.colorAttachmentCount    = 1;
+            subpass.pColorAttachments       = &colorAttachmentRef;
+            subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
             VkSubpassDependency dependency{};
             dependency.srcSubpass    = VK_SUBPASS_EXTERNAL;
@@ -272,10 +314,14 @@ class HelloTriangleApplication
             dependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
             dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
+            std::vector<VkAttachmentDescription> attachments{
+                colorAttachment, depthAttachment
+            };
+
             VkRenderPassCreateInfo renderPassInfo{};
             renderPassInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-            renderPassInfo.attachmentCount = 1;
-            renderPassInfo.pAttachments    = &colorAttachment;
+            renderPassInfo.attachmentCount = attachments.size();
+            renderPassInfo.pAttachments    = attachments.data();
             renderPassInfo.subpassCount    = 1;
             renderPassInfo.pSubpasses      = &subpass;
             renderPassInfo.dependencyCount = 1;
@@ -288,8 +334,9 @@ class HelloTriangleApplication
         static void CreateGraphicsPipeline(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
                 VkPipelineLayout* a_pLayout, VkPipeline* a_pPipiline)
         {
-            auto vertShaderCode = vk_utils::ReadFile("shaders/vert.spv");
-            auto fragShaderCode = vk_utils::ReadFile("shaders/frag.spv");
+            //auto vertShaderCode = vk_utils::ReadFile("shaders/vertex.vert.spv");
+            auto vertShaderCode = vk_utils::ReadFile("shaders/tri_mesh.vert.spv");
+            auto fragShaderCode = vk_utils::ReadFile("shaders/fragment.frag.spv");
 
             VkShaderModule vertShaderModule = vk_utils::CreateShaderModule(a_device, vertShaderCode);
             VkShaderModule fragShaderModule = vk_utils::CreateShaderModule(a_device, fragShaderCode);
@@ -310,28 +357,14 @@ class HelloTriangleApplication
                 vertShaderStageInfo, fragShaderStageInfo
             };
 
-            typedef struct vertex_t
-            {
-                glm::vec4 position;
-
-            } vertex;
-
-            std::vector<VkVertexInputBindingDescription> vInputBindings {
-                // binding, stride, inputRate
-                { 0, sizeof(vertex), VK_VERTEX_INPUT_RATE_VERTEX }
-            };
-
-            std::vector<VkVertexInputAttributeDescription> vAttributes {
-                // location, binding, format, offset
-                { 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 0 }
-            };
+            VertexInputDescription vertexDescr{ Vertex::getVertexDescription() };
 
             VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
             vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-            vertexInputInfo.vertexBindingDescriptionCount   = vInputBindings.size();
-            vertexInputInfo.vertexAttributeDescriptionCount = vAttributes.size();
-            vertexInputInfo.pVertexBindingDescriptions      = vInputBindings.data();
-            vertexInputInfo.pVertexAttributeDescriptions    = vAttributes.data();
+            vertexInputInfo.vertexBindingDescriptionCount   = vertexDescr.bindings.size();
+            vertexInputInfo.vertexAttributeDescriptionCount = vertexDescr.attributes.size();
+            vertexInputInfo.pVertexBindingDescriptions      = vertexDescr.bindings.data();
+            vertexInputInfo.pVertexAttributeDescriptions    = vertexDescr.attributes.data();
 
             VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
             inputAssembly.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -362,7 +395,7 @@ class HelloTriangleApplication
             rasterizer.rasterizerDiscardEnable = VK_FALSE;
             rasterizer.polygonMode             = VK_POLYGON_MODE_FILL;
             rasterizer.lineWidth               = 1.0f;
-            rasterizer.cullMode                = VK_CULL_MODE_FRONT_BIT;
+            rasterizer.cullMode                = VK_CULL_MODE_NONE;
             rasterizer.frontFace               = VK_FRONT_FACE_CLOCKWISE;
             rasterizer.depthBiasEnable         = VK_FALSE;
 
@@ -374,8 +407,8 @@ class HelloTriangleApplication
             VkPipelineDepthStencilStateCreateInfo depthAndStencil{};
             depthAndStencil.sType              = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
             depthAndStencil.depthTestEnable    = VK_TRUE;
-            depthAndStencil.depthWriteEnable   = VK_COMPARE_OP_ALWAYS;
-            depthAndStencil.depthCompareOp     = VK_COMPARE_OP_LESS;
+            depthAndStencil.depthWriteEnable   = VK_TRUE;
+            depthAndStencil.depthCompareOp     = VK_COMPARE_OP_LESS_OR_EQUAL;
             depthAndStencil.depthBoundsTestEnable = VK_FALSE;
             depthAndStencil.stencilTestEnable  = VK_FALSE;
 
@@ -393,10 +426,15 @@ class HelloTriangleApplication
             colorBlending.blendConstants[2] = 0.0f;
             colorBlending.blendConstants[3] = 0.0f;
 
+            std::vector<VkPushConstantRange> pushConstants{
+                { VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants) }
+            };
+
             VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
             pipelineLayoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             pipelineLayoutInfo.setLayoutCount         = 0;
-            pipelineLayoutInfo.pushConstantRangeCount = 0;
+            pipelineLayoutInfo.pushConstantRangeCount = pushConstants.size();
+            pipelineLayoutInfo.pPushConstantRanges    = pushConstants.data();
 
             if (vkCreatePipelineLayout(a_device, &pipelineLayoutInfo, nullptr, a_pLayout) != VK_SUCCESS)
                 throw std::runtime_error("[CreateGraphicsPipeline]: failed to create pipeline layout!");
@@ -410,6 +448,7 @@ class HelloTriangleApplication
             pipelineInfo.pViewportState      = &viewportState;
             pipelineInfo.pRasterizationState = &rasterizer;
             pipelineInfo.pMultisampleState   = &multisampling;
+            pipelineInfo.pDepthStencilState  = &depthAndStencil;
             pipelineInfo.pColorBlendState    = &colorBlending;
             pipelineInfo.layout              = (*a_pLayout);
             pipelineInfo.renderPass          = a_renderPass;
@@ -423,9 +462,101 @@ class HelloTriangleApplication
             vkDestroyShaderModule(a_device, vertShaderModule, nullptr);
         }
 
+        static void CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, vk_utils::ScreenBufferResources* pScreen,
+                VkImageView a_depthImageView)
+        {
+            pScreen->swapChainFramebuffers.resize(pScreen->swapChainImageViews.size());
 
-        static void CreateAndWriteCommandBuffers(VkDevice a_device, VkCommandPool a_cmdPool, std::vector<VkFramebuffer> a_swapChainFramebuffers, VkExtent2D a_frameBufferExtent,
-                VkRenderPass a_renderPass, VkPipeline a_graphicsPipeline, VkBuffer a_vPosBuffer, VkBuffer a_vIndBuffer, std::vector<VkCommandBuffer>* a_cmdBuffers) 
+            for (size_t i = 0; i < pScreen->swapChainImageViews.size(); i++) 
+            {
+                std::vector<VkImageView> attachments{
+                    pScreen->swapChainImageViews[i],
+                    a_depthImageView
+                };
+
+                VkFramebufferCreateInfo framebufferInfo = {};
+                framebufferInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+                framebufferInfo.renderPass      = a_renderPass;
+                framebufferInfo.attachmentCount = attachments.size();
+                framebufferInfo.pAttachments    = attachments.data();
+                framebufferInfo.width           = pScreen->swapChainExtent.width;
+                framebufferInfo.height          = pScreen->swapChainExtent.height;
+                framebufferInfo.layers          = 1;
+
+                if (vkCreateFramebuffer(a_device, &framebufferInfo, nullptr, &pScreen->swapChainFramebuffers[i]) != VK_SUCCESS)
+                    throw std::runtime_error("failed to create framebuffer!");
+            }
+        }
+
+        static glm::mat4 camera(unsigned a_frameNumber)
+        {
+            glm::vec3 camPos = { 0.f, 0.f, -8.f };
+
+            glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
+            glm::mat4 projection = glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.0f);
+            projection[1][1] *= -1;
+            glm::mat4 model = glm::rotate(glm::mat4{ 1.0f }, glm::radians(a_frameNumber * 0.004f), glm::vec3(0, 1, 0));
+
+            return projection * view * model;
+        }
+
+        static void RecordCommandBuffer(VkFramebuffer a_swapChainFramebuffer, VkExtent2D a_frameBufferExtent, VkRenderPass a_renderPass,
+                VkPipeline a_graphicsPipeline, VkPipelineLayout a_layout, std::vector<Mesh> a_meshes, VkCommandBuffer a_cmdBuffer, const unsigned a_frameID) 
+        {
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+            if (vkBeginCommandBuffer(a_cmdBuffer, &beginInfo) != VK_SUCCESS) 
+                throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to begin recording command buffer!");
+
+            VkClearValue colorClear;
+            colorClear.color = { {  1.0f, 0.7f, 0.6f, 1.0f } };
+
+            VkClearValue depthClear;
+            depthClear.depthStencil.depth = 1.f;
+
+            std::vector<VkClearValue> clearValues{ colorClear, depthClear };
+
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass        = a_renderPass;
+            renderPassInfo.framebuffer       = a_swapChainFramebuffer;
+            renderPassInfo.renderArea.offset = { 0, 0 };
+            renderPassInfo.renderArea.extent = a_frameBufferExtent;
+            renderPassInfo.clearValueCount  = clearValues.size();
+            renderPassInfo.pClearValues     = clearValues.data();
+
+            vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_graphicsPipeline);
+
+            {
+                std::vector<VkBuffer>     vertexBuffers{ a_meshes[0].getVBO().buffer };
+                std::vector<VkDeviceSize> offsets{ 0 };
+
+                vkCmdBindVertexBuffers(a_cmdBuffer, 0, vertexBuffers.size(), vertexBuffers.data(), offsets.data());
+            }
+
+            // push constants
+            {
+                MeshPushConstants constants{};
+                constants.mvp = camera(a_frameID);
+
+                vkCmdPushConstants(a_cmdBuffer, a_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
+            }
+
+            vkCmdDraw(a_cmdBuffer, a_meshes[0].vertices.size(), 3, 0, 0);
+
+            vkCmdEndRenderPass(a_cmdBuffer);
+
+            if (vkEndCommandBuffer(a_cmdBuffer) != VK_SUCCESS) {
+                throw std::runtime_error("failed to record command buffer!");
+            }
+        }
+
+        static void CreateCommandBuffers(VkDevice a_device, VkCommandPool a_cmdPool, std::vector<VkFramebuffer> a_swapChainFramebuffers,
+                std::vector<VkCommandBuffer>* a_cmdBuffers) 
         {
             std::vector<VkCommandBuffer>& commandBuffers = (*a_cmdBuffers);
 
@@ -439,48 +570,6 @@ class HelloTriangleApplication
 
             if (vkAllocateCommandBuffers(a_device, &allocInfo, commandBuffers.data()) != VK_SUCCESS)
                 throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to allocate command buffers!");
-
-            for (size_t i = 0; i < commandBuffers.size(); i++) 
-            {
-                VkCommandBufferBeginInfo beginInfo{};
-                beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-
-                if (vkBeginCommandBuffer(commandBuffers[i], &beginInfo) != VK_SUCCESS) 
-                    throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to begin recording command buffer!");
-
-                VkRenderPassBeginInfo renderPassInfo{};
-                renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-                renderPassInfo.renderPass        = a_renderPass;
-                renderPassInfo.framebuffer       = a_swapChainFramebuffers[i];
-                renderPassInfo.renderArea.offset = { 0, 0 };
-                renderPassInfo.renderArea.extent = a_frameBufferExtent;
-
-                VkClearValue clearColor{ 1.0f, 0.7f, 0.6f, 1.0f };
-                renderPassInfo.clearValueCount = 1;
-                renderPassInfo.pClearValues = &clearColor;
-
-                vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-                vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, a_graphicsPipeline);
-
-                {
-                    std::vector<VkBuffer>     vertexBuffers{ a_vPosBuffer };
-                    std::vector<VkDeviceSize> offsets{ 0 };
-                    std::vector<VkBuffer>     indexBuffers{ a_vIndBuffer };
-
-                    vkCmdBindVertexBuffers(commandBuffers[i], 0, vertexBuffers.size(), vertexBuffers.data(), offsets.data());
-                    vkCmdBindIndexBuffer(commandBuffers[i], indexBuffers[0], 0, VK_INDEX_TYPE_UINT32);
-                }
-
-                // commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance
-                vkCmdDrawIndexed(commandBuffers[i], 6, 10, 0, 0, 0);
-
-                vkCmdEndRenderPass(commandBuffers[i]);
-
-                if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
-                    throw std::runtime_error("failed to record command buffer!");
-                }
-            }
         }
 
         static void CreateSyncObjects(VkDevice a_device, SyncObj* a_pSyncObjs)
@@ -504,6 +593,50 @@ class HelloTriangleApplication
                     throw std::runtime_error("[CreateSyncObjects]: failed to create synchronization objects for a frame!");
                 }
             }
+        }
+
+        static void CreateDepthImage(VkDevice a_device, VkPhysicalDevice a_physDevice, VkImage& a_image, VkDeviceMemory& a_imageMemory, VkImageView& a_imageView)
+        {
+            VkImageCreateInfo imgCreateInfo{};
+            imgCreateInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            imgCreateInfo.pNext         = nullptr;
+            imgCreateInfo.imageType     = VK_IMAGE_TYPE_2D;
+            imgCreateInfo.format        = VK_FORMAT_D32_SFLOAT; //TODO: VK_FORMAT_D32_SFLOAT
+            imgCreateInfo.extent        = VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1};
+            imgCreateInfo.mipLevels     = 1;
+            imgCreateInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+            imgCreateInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            imgCreateInfo.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+            imgCreateInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            imgCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            imgCreateInfo.arrayLayers   = 1;
+            VK_CHECK_RESULT(vkCreateImage(a_device, &imgCreateInfo, nullptr, &a_image));
+
+            VkMemoryRequirements memoryRequirements{};
+            vkGetImageMemoryRequirements(a_device, a_image, &memoryRequirements);
+
+            VkMemoryAllocateInfo allocateInfo{};
+            allocateInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocateInfo.allocationSize  = memoryRequirements.size;
+            allocateInfo.memoryTypeIndex = vk_utils::FindMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, a_physDevice);
+            VK_CHECK_RESULT(vkAllocateMemory(a_device, &allocateInfo, NULL, &a_imageMemory));
+            VK_CHECK_RESULT(vkBindImageMemory(a_device, a_image, a_imageMemory, 0));
+
+            VkImageViewCreateInfo imageViewInfo = {};
+            {
+                imageViewInfo.sType      = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                imageViewInfo.viewType   = VK_IMAGE_VIEW_TYPE_2D;
+                imageViewInfo.format     = VK_FORMAT_D32_SFLOAT;
+                imageViewInfo.components = { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                    VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY };
+                imageViewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+                imageViewInfo.subresourceRange.baseMipLevel   = 0;
+                imageViewInfo.subresourceRange.baseArrayLayer = 0;
+                imageViewInfo.subresourceRange.layerCount     = 1;
+                imageViewInfo.subresourceRange.levelCount     = 1;
+                imageViewInfo.image = a_image;
+            }
+            VK_CHECK_RESULT(vkCreateImageView(a_device, &imageViewInfo, nullptr, &a_imageView));
         }
 
         static void CreateVertexBuffer(VkDevice a_device, VkPhysicalDevice a_physDevice, const size_t a_bufferSize,
@@ -614,6 +747,14 @@ class HelloTriangleApplication
             uint32_t imageIndex;
             vkAcquireNextImageKHR(m_device, m_screen.swapChain, UINT64_MAX, m_sync.imageAvailableSemaphores[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
 
+            if (vkResetCommandBuffer(m_commandBuffers[imageIndex], 0) != VK_SUCCESS)
+            {
+                throw std::runtime_error("[DrawFrame]: failed to reset command buffer!");
+            }
+
+            RecordCommandBuffer(m_screen.swapChainFramebuffers[imageIndex], m_screen.swapChainExtent, m_renderPass, m_graphicsPipeline, m_pipelineLayout,
+                    m_meshes, m_commandBuffers[imageIndex], m_frameNumber);
+
             VkSemaphore      waitSemaphores[]{ m_sync.imageAvailableSemaphores[m_currentFrame] };
             VkPipelineStageFlags waitStages[]{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 
@@ -631,7 +772,9 @@ class HelloTriangleApplication
             submitInfo.pSignalSemaphores    = signalSemaphores;
 
             if (vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, m_sync.inFlightFences[m_currentFrame]) != VK_SUCCESS)
+            {
                 throw std::runtime_error("[DrawFrame]: failed to submit draw command buffer!");
+            }
 
             VkPresentInfoKHR presentInfo{};
             presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -645,20 +788,25 @@ class HelloTriangleApplication
             presentInfo.pImageIndices   = &imageIndex;
 
             vkQueuePresentKHR(m_presentQueue, &presentInfo);
-            m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+            m_currentFrame = (m_frameNumber + 1) % MAX_FRAMES_IN_FLIGHT;
+            ++m_frameNumber;
         }
 
     public:
 
         void run() 
         {
+            std::cout << "\tinitializing window...\n";
             InitWindow();
 
+            std::cout << "\tinitializing vulkan devices and queue...\n";
             InitVulkan();
             CreateResources();
 
+            std::cout << "\tlaunching main loop...\n";
             MainLoop();
 
+            std::cout << "\tcleaning up...\n";
             Cleanup();
         }
 };

@@ -7,8 +7,7 @@ void main(void)
 {
     vec4 pos = vertex * vec4(0.3, 0.3, 1.0, 1.0); 
 
-    pos   += vec4(-1.0f + float(gl_InstanceIndex) / 5,
-        -1.0f + float(gl_InstanceIndex) / 5, .0f, 1.0f);
+    pos   += vec4(-1.0f + float(gl_InstanceIndex) / 5, -1.0f + float(gl_InstanceIndex) / 5, .0f, 1.0f);
     color =  vec4(float(gl_InstanceIndex) / 10, 0.3, 0.5, 1.0f);
 
 	// Vulkan coordinate system is different
