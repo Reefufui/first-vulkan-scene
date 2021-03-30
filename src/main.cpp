@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cassert>
+#include <unordered_map>
 
 #include "vk_utils.h"
 #include "Mesh.hpp"
@@ -85,6 +86,65 @@ class HelloTriangleApplication
 
         // Meshes
         std::vector<Mesh> m_meshes{};
+
+        ////////////////////////////////////////////////////////
+
+        struct Material {
+            VkPipeline pipeline;
+            VkPipelineLayout pipelineLayout;
+        };
+
+        struct RenderObject {
+            Mesh* mesh;
+            Material* material;
+            glm::mat4 transformMatrix;
+        };
+
+        std::vector<RenderObject> m_renerables;
+        std::unordered_map<std::string, Material> m_materials;
+        std::unordered_map<std::string, Mesh> _m_meshes;
+
+        Material* createMaterial(VkPipeline a_pipeline, VkPipelineLayout a_layout, const std::string& name)
+        {
+            m_materials[name] = Material{ a_pipeline, a_layout };
+            return &m_materials[name];
+        }
+
+        Material* getMaterial(const std::string& name)
+        {
+            auto found{ m_materials.find(name) };
+
+            if (found != m_materials.end())
+            {
+                return &(*found).second;
+            }
+            else
+            {
+                return nullptr;
+            }
+        }
+
+        Mesh* getMesh(const std::string& name)
+        {
+            auto found{ _m_meshes.find(name) };
+
+            if (found != _m_meshes.end())
+            {
+                return &(*found).second;
+            }
+            else
+            {
+                return nullptr;
+            }
+
+            return nullptr;
+        }
+
+        void drawObjects(VkCommandBuffer a_cmdBuffer, std::vector<RenderObject> a_objects)
+        {
+        }
+
+        ////////////////////////////////////////////////////////
 
         void InitWindow() 
         {
@@ -163,10 +223,15 @@ class HelloTriangleApplication
         {
             a_mesh.loadFromOBJ(a_filename.c_str());
 
-            //TODO: vertex normals
+            //TODO: vertex normals & texture coordinates
 
             CreateVertexBuffer(a_device, a_physDevice, a_mesh.vertices.size() * sizeof(Vertex), &a_mesh.getVBO().buffer, &a_mesh.getVBO().memory);
-            PutDataToBuffer(a_device, a_pool, a_queue, (uint32_t*)a_mesh.vertices.data(), a_mesh.vertices.size() * sizeof(Vertex), a_mesh.getVBO().buffer);
+
+            void *mappedMemory = nullptr;
+
+            vkMapMemory(a_device, a_mesh.getVBO().memory, 0, a_mesh.vertices.size() * sizeof(Vertex), 0, &mappedMemory);
+            memcpy(mappedMemory, a_mesh.vertices.data(), a_mesh.vertices.size() * sizeof(Vertex));
+            vkUnmapMemory(a_device, a_mesh.getVBO().memory);
         }
 
         void CreateResources()
@@ -189,7 +254,7 @@ class HelloTriangleApplication
             std::cout << "\tloading meshes...\n";
 
             std::vector<std::string> filenames{
-                "assets/models/monkey.obj"
+                "assets/models/teapot.obj"
             };
 
             for (auto filename : filenames)
@@ -490,10 +555,10 @@ class HelloTriangleApplication
 
         static glm::mat4 camera(unsigned a_frameNumber)
         {
-            glm::vec3 camPos = { 0.f, 0.f, -8.f };
+            glm::vec3 camPos = { 0.f, 0.f, -113.f };
 
             glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
-            glm::mat4 projection = glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.0f);
+            glm::mat4 projection = glm::perspective(glm::radians(90.f), (float)WIDTH / (float)HEIGHT, 0.1f, 120.0f);
             projection[1][1] *= -1;
             glm::mat4 model = glm::rotate(glm::mat4{ 1.0f }, glm::radians(a_frameNumber * 0.004f), glm::vec3(0, 1, 0));
 
@@ -546,7 +611,7 @@ class HelloTriangleApplication
                 vkCmdPushConstants(a_cmdBuffer, a_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
             }
 
-            vkCmdDraw(a_cmdBuffer, a_meshes[0].vertices.size(), 3, 0, 0);
+            vkCmdDraw(a_cmdBuffer, a_meshes[0].vertices.size(), 1, 0, 0);
 
             vkCmdEndRenderPass(a_cmdBuffer);
 
@@ -647,7 +712,7 @@ class HelloTriangleApplication
             bufferCreateInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             bufferCreateInfo.pNext       = nullptr;
             bufferCreateInfo.size        = a_bufferSize;                         
-            bufferCreateInfo.usage       = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            bufferCreateInfo.usage       = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
             bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;            
 
             VK_CHECK_RESULT(vkCreateBuffer(a_device, &bufferCreateInfo, NULL, a_pBuffer));
@@ -659,7 +724,10 @@ class HelloTriangleApplication
             allocateInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             allocateInfo.pNext           = nullptr;
             allocateInfo.allocationSize  = memoryRequirements.size;
-            allocateInfo.memoryTypeIndex = vk_utils::FindMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, a_physDevice);
+            allocateInfo.memoryTypeIndex = vk_utils::FindMemoryType(memoryRequirements.memoryTypeBits, 
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                    | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    a_physDevice);
 
             VK_CHECK_RESULT(vkAllocateMemory(a_device, &allocateInfo, NULL, a_pBufferMemory));
 
@@ -712,32 +780,6 @@ class HelloTriangleApplication
 
             vkDestroyFence(a_device, fence, NULL);
         }
-
-        static void PutDataToBuffer(VkDevice a_device, VkCommandPool a_pool, VkQueue a_queue, const uint32_t* a_data, VkDeviceSize a_dataSize, VkBuffer a_buffer)
-        {
-            VkCommandBufferAllocateInfo allocInfo{};
-            allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            allocInfo.commandPool        = a_pool;
-            allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            allocInfo.commandBufferCount = 1;
-
-            VkCommandBuffer cmdBuff;
-            if (vkAllocateCommandBuffers(a_device, &allocInfo, &cmdBuff) != VK_SUCCESS)
-                throw std::runtime_error("[PutGroundVerticesToVBO_Now]: failed to allocate command buffer!");
-
-            VkCommandBufferBeginInfo beginInfo{};
-            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; 
-
-            vkBeginCommandBuffer(cmdBuff, &beginInfo);
-            vkCmdUpdateBuffer   (cmdBuff, a_buffer, 0, a_dataSize, a_data);
-            vkEndCommandBuffer  (cmdBuff);
-
-            RunCommandBuffer(cmdBuff, a_queue, a_device);
-
-            vkFreeCommandBuffers(a_device, a_pool, 1, &cmdBuff);
-        }
-
 
         void DrawFrame() 
         {

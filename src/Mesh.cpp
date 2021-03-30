@@ -5,6 +5,8 @@
 #include <iostream>
 #include <vector>
 
+#include <random>
+
 void Mesh::loadFromOBJ(const char* a_filename)
 {
     tinyobj::attrib_t                attrib;
@@ -31,6 +33,9 @@ void Mesh::loadFromOBJ(const char* a_filename)
         // Loop over faces(polygon)
         size_t indexOffset{};
 
+        std::random_device rd;
+        std::mt19937 gen(rd());
+
         for (size_t f{}; f < shape.mesh.num_face_vertices.size(); f++)
         {
             //hardcode loading to triangles
@@ -46,6 +51,7 @@ void Mesh::loadFromOBJ(const char* a_filename)
                 tinyobj::real_t vx = attrib.vertices[3 * idx.vertex_index + 0];
                 tinyobj::real_t vy = attrib.vertices[3 * idx.vertex_index + 1];
                 tinyobj::real_t vz = attrib.vertices[3 * idx.vertex_index + 2];
+
                 //vertex normal
                 tinyobj::real_t nx = attrib.normals[3 * idx.normal_index + 0];
                 tinyobj::real_t ny = attrib.normals[3 * idx.normal_index + 1];
@@ -61,8 +67,8 @@ void Mesh::loadFromOBJ(const char* a_filename)
                 new_vert.normal.y = ny;
                 new_vert.normal.z = nz;
 
-                //we are setting the vertex color as the vertex normal. This is just for display purposes
-                new_vert.color = new_vert.normal;
+                std::uniform_real_distribution<> dis(0.8, 1.0);
+                new_vert.color = glm::vec3(0.5f, 0.5f, dis(gen));
 
                 vertices.push_back(new_vert);
             }
