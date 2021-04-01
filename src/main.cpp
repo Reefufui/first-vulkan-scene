@@ -28,7 +28,7 @@
 const int WIDTH  = 800;
 const int HEIGHT = 600;
 
-const int MAX_FRAMES_IN_FLIGHT = 2;
+const int MAX_FRAMES_IN_FLIGHT = 3;
 
 const std::vector<const char*> deviceExtensions{
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
@@ -98,6 +98,13 @@ class Application
             glm::mat4 mvp;
         };
 
+        VkDescriptorSetLayout m_sceneDSLayout;
+        VkDescriptorPool      m_sceneDSPool;
+
+        std::vector<VkBuffer>        m_uniformBuffers;
+        std::vector<VkDeviceMemory>  m_uniformBuffersMemory;
+        std::vector<VkDescriptorSet> m_sceneDS;
+
         static VKAPI_ATTR VkBool32 VKAPI_CALL debugReportCallbackFn(
                 VkDebugReportFlagsEXT                       flags,
                 VkDebugReportObjectTypeEXT                  objectType,
@@ -116,6 +123,26 @@ class Application
         static void LoadMeshes(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
                 std::unordered_map<std::string, Mesh>& a_meshes)
         {
+            auto fillMeshBuffer = [&](VkBuffer& a_buffer, VkDeviceMemory& a_memory, void* a_src, VkBufferUsageFlags a_usage, size_t a_size)
+            {
+                VkBuffer stagingBuffer{};
+                VkDeviceMemory stagingBufferMemory{};
+
+                CreateHostVisibleBuffer(a_device, a_physDevice, a_size, &stagingBuffer, &stagingBufferMemory);
+
+                void *mappedMemory = nullptr;
+                vkMapMemory(a_device, stagingBufferMemory, 0, a_size, 0, &mappedMemory);
+                memcpy(mappedMemory, a_src, a_size);
+                vkUnmapMemory(a_device, stagingBufferMemory);
+
+                CreateDeviceLocalBuffer(a_device, a_physDevice, a_size, &a_buffer, &a_memory, a_usage);
+
+                SubmitStagingBuffer(a_device, a_pool, a_queue, stagingBuffer, a_buffer, a_size);
+
+                vkFreeMemory(a_device, stagingBufferMemory, nullptr);
+                vkDestroyBuffer(a_device, stagingBuffer, nullptr);
+            };
+
             auto loadMesh = [&](std::string&& meshName)
             {
                 Mesh mesh{};
@@ -123,23 +150,15 @@ class Application
                 std::string fileName{ "assets/meshes/.obj" };
                 fileName.insert(fileName.find("."), meshName);
                 mesh.loadFromOBJ(fileName.c_str());
-                CreateVertexBuffer(a_device, a_physDevice, mesh.vertices.size() * sizeof(Vertex), &mesh.getVBO().buffer, &mesh.getVBO().memory);
-                {
-                    void *mappedMemory = nullptr;
-                    vkMapMemory(a_device, mesh.getVBO().memory, 0, mesh.vertices.size() * sizeof(Vertex), 0, &mappedMemory);
-                    memcpy(mappedMemory, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
-                    vkUnmapMemory(a_device, mesh.getVBO().memory);
-                }
 
-                CreateIndexBuffer(a_device, a_physDevice, mesh.indices.size() * sizeof(uint32_t), &mesh.getIBO().buffer, &mesh.getIBO().memory);
-                {
-                    void *mappedMemory = nullptr;
-                    vkMapMemory(a_device, mesh.getIBO().memory, 0, mesh.indices.size() * sizeof(uint32_t), 0, &mappedMemory);
-                    memcpy(mappedMemory, mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t));
-                    vkUnmapMemory(a_device, mesh.getIBO().memory);
-                }
+                fillMeshBuffer(mesh.getVBO().buffer, mesh.getVBO().memory, mesh.vertices.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                        mesh.vertices.size() * sizeof(Vertex));
+
+                fillMeshBuffer(mesh.getIBO().buffer, mesh.getIBO().memory, mesh.indices.data(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                        mesh.indices.size() * sizeof(uint32_t));
 
                 a_meshes[meshName] = mesh;
+
             };
 
             loadMesh("terrain");
@@ -204,11 +223,15 @@ class Application
             std::cout << "\tcreating sync objects...\n";
             CreateSyncObjects(m_device, &m_sync);
 
+            std::cout << "\tcreating uniform buffers...\n";
+            CreateUniformBuffers(m_device, physicalDevice, sizeof(UBO), m_uniformBuffers, m_uniformBuffersMemory, m_screen.swapChainImageViews.size());
+
             std::cout << "\tcreating descriptor sets...\n";
-            CreateSceneDescriptorSetLayout();
+            CreateSceneDescriptorSetLayout(m_device, &m_sceneDSLayout);
+            CreateDescriptorSet(m_device, m_uniformBuffers, sizeof(UBO), &m_sceneDSLayout, &m_sceneDSPool, m_sceneDS, m_screen.swapChainImageViews.size());
 
             std::cout << "\tcreating graphics pipeline...\n";
-            CreateSceneGraphicsPipeline(m_device, m_screen.swapChainExtent, m_renderPass, m_pipes);
+            CreateSceneGraphicsPipeline(m_device, m_screen.swapChainExtent, m_renderPass, m_pipes, m_sceneDSLayout);
 
             std::cout << "\tloading meshes...\n";
             LoadMeshes(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_meshes);
@@ -295,12 +318,76 @@ class Application
                 throw std::runtime_error("[CreateRenderPass]: failed to create render pass!");
         }
 
-        static void CreateSceneDescriptorSetLayout()
+        static void CreateSceneDescriptorSetLayout(VkDevice a_device, VkDescriptorSetLayout *a_pDSLayout)
         {
+            VkDescriptorSetLayoutBinding descriptorSetLayoutBinding{};
+
+            descriptorSetLayoutBinding.binding            = 0;
+            descriptorSetLayoutBinding.descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorSetLayoutBinding.descriptorCount    = 1;
+            descriptorSetLayoutBinding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+            descriptorSetLayoutBinding.pImmutableSamplers = nullptr;
+
+            VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo{};
+            descriptorSetLayoutCreateInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            descriptorSetLayoutCreateInfo.bindingCount = 1;
+            descriptorSetLayoutCreateInfo.pBindings    = &descriptorSetLayoutBinding;
+
+            if (vkCreateDescriptorSetLayout(a_device, &descriptorSetLayoutCreateInfo, nullptr, a_pDSLayout) != VK_SUCCESS)
+                throw std::runtime_error("[CreateSceneDescriptorSetLayout]: failed to create DS layout!");
+        }
+
+        static void CreateDescriptorSet(VkDevice a_device, std::vector<VkBuffer>& a_buffer, size_t a_bufferSize, const VkDescriptorSetLayout *a_pDSLayout,
+                VkDescriptorPool *a_pDSPool, std::vector<VkDescriptorSet>& a_dsets, size_t a_count)
+        {
+            VkDescriptorPoolSize descriptorPoolSize{};
+            descriptorPoolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorPoolSize.descriptorCount = a_count;
+
+            VkDescriptorPoolCreateInfo descriptorPoolCreateInfo{};
+            descriptorPoolCreateInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            descriptorPoolCreateInfo.maxSets       = a_count;
+            descriptorPoolCreateInfo.poolSizeCount = 1;
+            descriptorPoolCreateInfo.pPoolSizes    = &descriptorPoolSize;
+
+            if (vkCreateDescriptorPool(a_device, &descriptorPoolCreateInfo, NULL, a_pDSPool) != VK_SUCCESS)
+                throw std::runtime_error("[CreateDescriptorSet]: failed to create descriptor set pool!");
+
+            std::vector<VkDescriptorSetLayout> layouts(a_count, *a_pDSLayout);
+
+            VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{};
+            descriptorSetAllocateInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            descriptorSetAllocateInfo.descriptorPool     = *a_pDSPool;
+            descriptorSetAllocateInfo.descriptorSetCount = a_count;
+            descriptorSetAllocateInfo.pSetLayouts        = layouts.data();
+
+            a_dsets.resize(a_count);
+            if (vkAllocateDescriptorSets(a_device, &descriptorSetAllocateInfo, a_dsets.data()) != VK_SUCCESS)
+                throw std::runtime_error("[CreateDescriptorSet]: failed to allocate descriptor set pool!");
+
+            for (size_t i{}; i < a_count; ++i)
+            {
+                VkDescriptorBufferInfo bufferInfo{};
+                bufferInfo.buffer = a_buffer[i];
+                bufferInfo.range = a_bufferSize;
+
+                VkWriteDescriptorSet descrWrite{};
+                descrWrite.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                descrWrite.dstSet            = a_dsets[i];
+                descrWrite.dstBinding        = 0;
+                descrWrite.dstArrayElement   = 0;
+                descrWrite.descriptorType    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                descrWrite.descriptorCount   = 1;
+                descrWrite.pBufferInfo       = &bufferInfo;
+                descrWrite.pImageInfo        = nullptr;
+                descrWrite.pTexelBufferView  = nullptr;
+
+                vkUpdateDescriptorSets(a_device, 1, &descrWrite, 0, nullptr);
+            }
         }
 
         static void CreateSceneGraphicsPipeline(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
-                std::unordered_map<std::string, Pipe>& a_pipes)
+                std::unordered_map<std::string, Pipe>& a_pipes, VkDescriptorSetLayout a_dsLayout)
         {
             auto vertShaderCode = vk_utils::ReadFile("shaders/scene.vert.spv");
             auto fragShaderCode = vk_utils::ReadFile("shaders/scene.frag.spv");
@@ -399,7 +486,8 @@ class Application
 
             VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
             pipelineLayoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            pipelineLayoutInfo.setLayoutCount         = 0;
+            pipelineLayoutInfo.setLayoutCount         = 1;
+            pipelineLayoutInfo.pSetLayouts            = &a_dsLayout;
             pipelineLayoutInfo.pushConstantRangeCount = pushConstants.size();
             pipelineLayoutInfo.pPushConstantRanges    = pushConstants.data();
 
@@ -475,8 +563,20 @@ class Application
             return projection * view;
         }
 
-        static void RecordCommandBuffer(VkFramebuffer a_swapChainFramebuffer, VkExtent2D a_frameBufferExtent, VkRenderPass a_renderPass,
-                const std::unordered_map<std::string, RenderObject>& a_objects, VkCommandBuffer a_cmdBuffer) 
+        static void UpdateUniformBuffer(VkDevice a_device, VkBuffer& a_ubo, VkDeviceMemory& a_uboMem, glm::mat4 a_modelMatrix)
+        {
+            UBO ubo{};
+            ubo.mvp = camera() * a_modelMatrix;
+
+            void* mappedMemory{nullptr};
+            vkMapMemory(a_device, a_uboMem, 0, sizeof(UBO), 0, &mappedMemory);
+            memcpy(mappedMemory, &ubo, sizeof(UBO));
+            vkUnmapMemory(a_device, a_uboMem);
+        }
+
+        static void RecordCommandBuffer(VkDevice a_device, VkFramebuffer a_swapChainFramebuffer, VkExtent2D a_frameBufferExtent, VkRenderPass a_renderPass,
+                const std::unordered_map<std::string, RenderObject>& a_objects, VkBuffer& a_ubo, VkDeviceMemory& a_uboMem, VkCommandBuffer a_cmdBuffer,
+                VkDescriptorSet a_descrSet) 
         {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -514,11 +614,15 @@ class Application
                 if (obj.pipe != previousPipe)
                 {
                     vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipeline);
+                    vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipelineLayout, 0, 1, &a_descrSet, 0, nullptr);
                     previousPipe = obj.pipe;
                 }
 
                 MeshPushConstants constants{};
                 constants.mvp = camera() * obj.transformMatrix;
+
+                UpdateUniformBuffer(a_device, a_ubo, a_uboMem, obj.transformMatrix);
+
                 vkCmdPushConstants(a_cmdBuffer, obj.pipe->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
 
                 if (obj.mesh != previousMesh)
@@ -625,15 +729,26 @@ class Application
             VK_CHECK_RESULT(vkCreateImageView(a_device, &imageViewInfo, nullptr, &a_imageView));
         }
 
-        static void CreateVertexBuffer(VkDevice a_device, VkPhysicalDevice a_physDevice, const size_t a_bufferSize,
-                VkBuffer *a_pBuffer, VkDeviceMemory *a_pBufferMemory)
+        static void CreateUniformBuffers(VkDevice a_device, VkPhysicalDevice a_physDevice, const size_t a_bufferSize, std::vector<VkBuffer>& a_ubos,
+                std::vector<VkDeviceMemory>& a_ubosMemory, size_t a_count)
         {
+            a_ubos.resize(a_count);
+            a_ubosMemory.resize(a_count);
 
+            for (size_t i{}; i < a_count; ++i)
+            {
+                CreateHostVisibleBuffer(a_device, a_physDevice, a_bufferSize, &(a_ubos[i]), &(a_ubosMemory[i]), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            }
+        }
+
+        static void CreateHostVisibleBuffer(VkDevice a_device, VkPhysicalDevice a_physDevice, const size_t a_bufferSize,
+                VkBuffer *a_pBuffer, VkDeviceMemory *a_pBufferMemory, VkBufferUsageFlags a_usage = 0)
+        {
             VkBufferCreateInfo bufferCreateInfo{};
             bufferCreateInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             bufferCreateInfo.pNext       = nullptr;
             bufferCreateInfo.size        = a_bufferSize;                         
-            bufferCreateInfo.usage       = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+            bufferCreateInfo.usage       = a_usage | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
             bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;            
 
             VK_CHECK_RESULT(vkCreateBuffer(a_device, &bufferCreateInfo, NULL, a_pBuffer));
@@ -655,15 +770,15 @@ class Application
             VK_CHECK_RESULT(vkBindBufferMemory(a_device, (*a_pBuffer), (*a_pBufferMemory), 0));
         }
 
-        static void CreateIndexBuffer(VkDevice a_device, VkPhysicalDevice a_physDevice, const size_t a_bufferSize,
-                VkBuffer *a_pBuffer, VkDeviceMemory *a_pBufferMemory)
+        static void CreateDeviceLocalBuffer(VkDevice a_device, VkPhysicalDevice a_physDevice, const size_t a_bufferSize,
+                VkBuffer *a_pBuffer, VkDeviceMemory *a_pBufferMemory, VkBufferUsageFlags a_usage)
         {
 
             VkBufferCreateInfo bufferCreateInfo{};
             bufferCreateInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             bufferCreateInfo.pNext       = nullptr;
-            bufferCreateInfo.size        = a_bufferSize;                         
-            bufferCreateInfo.usage       = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            bufferCreateInfo.size        = a_bufferSize;
+            bufferCreateInfo.usage       = a_usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
             bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;            
 
             VK_CHECK_RESULT(vkCreateBuffer(a_device, &bufferCreateInfo, NULL, a_pBuffer));
@@ -675,14 +790,40 @@ class Application
             allocateInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             allocateInfo.pNext           = nullptr;
             allocateInfo.allocationSize  = memoryRequirements.size;
-            allocateInfo.memoryTypeIndex = vk_utils::FindMemoryType(memoryRequirements.memoryTypeBits, 
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                    | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    a_physDevice);
+            allocateInfo.memoryTypeIndex = vk_utils::FindMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, a_physDevice);
 
             VK_CHECK_RESULT(vkAllocateMemory(a_device, &allocateInfo, NULL, a_pBufferMemory));
 
             VK_CHECK_RESULT(vkBindBufferMemory(a_device, (*a_pBuffer), (*a_pBufferMemory), 0));
+        }
+
+        static void SubmitStagingBuffer(VkDevice a_device, VkCommandPool a_pool, VkQueue a_queue, VkBuffer a_cpuBuffer, VkBuffer a_gpuBuffer, size_t a_size)
+        {
+            VkCommandBufferAllocateInfo allocInfo = {};
+            allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.commandPool        = a_pool;
+            allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandBufferCount = 1;
+
+            VkCommandBuffer cmdBuff;
+            if (vkAllocateCommandBuffers(a_device, &allocInfo, &cmdBuff) != VK_SUCCESS)
+                throw std::runtime_error("[SubmitStagingBuffer]: failed to allocate command buffer!");
+
+            VkCommandBufferBeginInfo beginInfo = {};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; 
+
+            vkBeginCommandBuffer(cmdBuff, &beginInfo);
+
+            VkBufferCopy copyRegion{};
+            copyRegion.size = a_size;
+            vkCmdCopyBuffer(cmdBuff, a_cpuBuffer, a_gpuBuffer, 1, &copyRegion);
+
+            vkEndCommandBuffer(cmdBuff);
+
+            RunCommandBuffer(cmdBuff, a_queue, a_device);
+
+            vkFreeCommandBuffers(a_device, a_pool, 1, &cmdBuff);
         }
 
         static void RunCommandBuffer(VkCommandBuffer a_cmdBuff, VkQueue a_queue, VkDevice a_device)
@@ -718,7 +859,8 @@ class Application
                 throw std::runtime_error("[DrawFrame]: failed to reset command buffer!");
             }
 
-            RecordCommandBuffer(m_screen.swapChainFramebuffers[imageIndex], m_screen.swapChainExtent, m_renderPass, m_renerables, m_commandBuffers[imageIndex]);
+            RecordCommandBuffer(m_device, m_screen.swapChainFramebuffers[imageIndex], m_screen.swapChainExtent, m_renderPass, m_renerables,
+                    m_uniformBuffers[imageIndex], m_uniformBuffersMemory[imageIndex], m_commandBuffers[imageIndex], m_sceneDS[imageIndex]);
 
             VkSemaphore      waitSemaphores[]{ m_sync.imageAvailableSemaphores[m_currentFrame] };
             VkPipelineStageFlags waitStages[]{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -819,26 +961,36 @@ class Application
         { 
             std::cout << "\tcleaning up...\n";
 
-            // free our meshes
             for (auto mesh : m_meshes)
             {
                 mesh.second.setDevice(m_device);
                 mesh.second.cleanup();
             }
 
-            // feer our pipelines
             for (auto pipe : m_pipes)
             {
                 vkDestroyPipeline      (m_device, pipe.second.pipeline, nullptr);
                 vkDestroyPipelineLayout(m_device, pipe.second.pipelineLayout, nullptr);
             }
 
-            vkDestroyRenderPass    (m_device, m_renderPass, nullptr);
+            vkDestroyDescriptorSetLayout(m_device, m_sceneDSLayout, nullptr);
+            vkDestroyDescriptorPool(m_device, m_sceneDSPool, nullptr);
+
+            for (auto& uboMem : m_uniformBuffersMemory)
+            {
+                vkFreeMemory(m_device, uboMem, nullptr);
+            }
+            for (auto& ubo : m_uniformBuffers)
+            {
+                vkDestroyBuffer(m_device, ubo, nullptr);
+            }
 
             // free depth image resources
             vkFreeMemory      (m_device, m_depthImageMemory, NULL);
             vkDestroyImage    (m_device, m_depthImage,       NULL);
             vkDestroyImageView(m_device, m_depthImageView,   NULL);
+
+            vkDestroyRenderPass    (m_device, m_renderPass, nullptr);
 
             if (enableValidationLayers)
             {
@@ -847,7 +999,7 @@ class Application
                 func(m_instance, debugReportCallback, NULL);
             }
 
-            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) 
+            for (size_t i{}; i < MAX_FRAMES_IN_FLIGHT; ++i) 
             {
                 vkDestroySemaphore(m_device, m_sync.renderFinishedSemaphores[i], nullptr);
                 vkDestroySemaphore(m_device, m_sync.imageAvailableSemaphores[i], nullptr);

@@ -7,6 +7,11 @@ layout (location = 3) in vec2 vUVCoord;
 
 layout (location = 0) out vec3 outColor;
 
+layout(binding = 0) uniform UniformBufferObject
+{
+    mat4 mvp;
+} ubo;
+
 layout( push_constant ) uniform constants
 {
 	vec4 data;
@@ -15,7 +20,7 @@ layout( push_constant ) uniform constants
 
 void main() 
 {	
-	gl_Position = PushConstants.mvp * vec4(vPosition, 1.0f) + vec4(-4.0f + 4 * float(gl_InstanceIndex), .0f, .0f, 1.0f);
+	gl_Position = ubo.mvp * vec4(vPosition, 1.0f) + vec4(-4.0f + 4 * float(gl_InstanceIndex), .0f, .0f, 1.0f);
 	outColor = vNormal;
 }
 
