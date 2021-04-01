@@ -23,6 +23,7 @@
 
 #include "vk_utils.h"
 #include "Mesh.hpp"
+#include "Timer.hpp"
 
 const int WIDTH  = 800;
 const int HEIGHT = 600;
@@ -39,7 +40,9 @@ const bool enableValidationLayers = false;
 const bool enableValidationLayers = true;
 #endif
 
-class HelloTriangleApplication 
+static Timer timer{};
+
+class Application 
 {
     private:
         GLFWwindow * m_window;
@@ -59,17 +62,10 @@ class HelloTriangleApplication
         vk_utils::ScreenBufferResources m_screen;
 
         VkRenderPass     m_renderPass;
-        VkPipelineLayout m_pipelineLayout;
-        VkPipeline       m_graphicsPipeline;
 
         VkCommandPool                m_commandPool;
         std::vector<VkCommandBuffer> m_commandBuffers;
 
-        // buffers
-        VkBuffer       m_vbo, m_ibo;
-        VkDeviceMemory m_vboMem, m_iboMem;
-
-        //images
         VkImage        m_depthImage;
         VkDeviceMemory m_depthImageMemory;
         VkImageView    m_depthImageView;
@@ -82,79 +78,21 @@ class HelloTriangleApplication
         } m_sync;
 
         size_t m_currentFrame{};
-        unsigned m_frameNumber{};
 
-        // Meshes
-        std::vector<Mesh> m_meshes{};
-
-        ////////////////////////////////////////////////////////
-
-        struct Material {
-            VkPipeline pipeline;
+        struct Pipe {
+            VkPipeline       pipeline;
             VkPipelineLayout pipelineLayout;
         };
 
         struct RenderObject {
             Mesh* mesh;
-            Material* material;
+            Pipe* pipe;
             glm::mat4 transformMatrix;
         };
 
-        std::vector<RenderObject> m_renerables;
-        std::unordered_map<std::string, Material> m_materials;
-        std::unordered_map<std::string, Mesh> _m_meshes;
-
-        Material* createMaterial(VkPipeline a_pipeline, VkPipelineLayout a_layout, const std::string& name)
-        {
-            m_materials[name] = Material{ a_pipeline, a_layout };
-            return &m_materials[name];
-        }
-
-        Material* getMaterial(const std::string& name)
-        {
-            auto found{ m_materials.find(name) };
-
-            if (found != m_materials.end())
-            {
-                return &(*found).second;
-            }
-            else
-            {
-                return nullptr;
-            }
-        }
-
-        Mesh* getMesh(const std::string& name)
-        {
-            auto found{ _m_meshes.find(name) };
-
-            if (found != _m_meshes.end())
-            {
-                return &(*found).second;
-            }
-            else
-            {
-                return nullptr;
-            }
-
-            return nullptr;
-        }
-
-        void drawObjects(VkCommandBuffer a_cmdBuffer, std::vector<RenderObject> a_objects)
-        {
-        }
-
-        ////////////////////////////////////////////////////////
-
-        void InitWindow() 
-        {
-            glfwInit();
-
-            glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-            glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-
-            m_window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
-        }
+        std::unordered_map<std::string, RenderObject> m_renerables;
+        std::unordered_map<std::string, Pipe>         m_pipes;
+        std::unordered_map<std::string, Mesh>         m_meshes;
 
         static VKAPI_ATTR VkBool32 VKAPI_CALL debugReportCallbackFn(
                 VkDebugReportFlagsEXT                       flags,
@@ -171,76 +109,91 @@ class HelloTriangleApplication
         }
         VkDebugReportCallbackEXT debugReportCallback;
 
-
-        void InitVulkan() 
+        static void LoadMeshes(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
+                std::unordered_map<std::string, Mesh>& a_meshes)
         {
-            const int deviceId = 0;
-
-            std::vector<const char*> extensions;
+            auto loadMesh = [&](std::string&& meshName)
             {
-                uint32_t glfwExtensionCount = 0;
-                const char** glfwExtensions;
-                glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-                extensions     = std::vector<const char*>(glfwExtensions, glfwExtensions + glfwExtensionCount);
-            }
+                Mesh mesh{};
 
-            m_instance = vk_utils::CreateInstance(enableValidationLayers, m_enabledLayers, extensions);
-            if (enableValidationLayers)
-                vk_utils::InitDebugReportCallback(m_instance, &debugReportCallbackFn, &debugReportCallback);
+                std::string fileName{ "assets/models/.obj" };
+                fileName.insert(fileName.find("."), meshName);
+                mesh.loadFromOBJ(fileName.c_str());
+                CreateVertexBuffer(a_device, a_physDevice, mesh.vertices.size() * sizeof(Vertex), &mesh.getVBO().buffer, &mesh.getVBO().memory);
+                {
+                    void *mappedMemory = nullptr;
+                    vkMapMemory(a_device, mesh.getVBO().memory, 0, mesh.vertices.size() * sizeof(Vertex), 0, &mappedMemory);
+                    memcpy(mappedMemory, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
+                    vkUnmapMemory(a_device, mesh.getVBO().memory);
+                }
 
-            if (glfwCreateWindowSurface(m_instance, m_window, nullptr, &m_surface) != VK_SUCCESS)
-                throw std::runtime_error("glfwCreateWindowSurface: failed to create window surface!");
+                CreateIndexBuffer(a_device, a_physDevice, mesh.indices.size() * sizeof(uint32_t), &mesh.getIBO().buffer, &mesh.getIBO().memory);
+                {
+                    void *mappedMemory = nullptr;
+                    vkMapMemory(a_device, mesh.getIBO().memory, 0, mesh.indices.size() * sizeof(uint32_t), 0, &mappedMemory);
+                    memcpy(mappedMemory, mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t));
+                    vkUnmapMemory(a_device, mesh.getIBO().memory);
+                }
 
-            physicalDevice = vk_utils::FindPhysicalDevice(m_instance, true, deviceId);
-            auto queueFID  = vk_utils::GetQueueFamilyIndex(physicalDevice, VK_QUEUE_GRAPHICS_BIT);
+                a_meshes[meshName] = mesh;
+            };
 
-            VkBool32 presentSupport = false;
-            vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, queueFID, m_surface, &presentSupport);
-            if (!presentSupport)
-                throw std::runtime_error("vkGetPhysicalDeviceSurfaceSupportKHR: no present support for the target device and graphics queue");
-
-            m_device = vk_utils::CreateLogicalDevice(queueFID, physicalDevice, m_enabledLayers, deviceExtensions);
-            vkGetDeviceQueue(m_device, queueFID, 0, &m_graphicsQueue);
-            vkGetDeviceQueue(m_device, queueFID, 0, &m_presentQueue);
-
-            // ==> commadnPool
-            {
-                VkCommandPoolCreateInfo poolInfo{};
-                poolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-                poolInfo.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-                poolInfo.queueFamilyIndex = vk_utils::GetQueueFamilyIndex(physicalDevice, VK_QUEUE_GRAPHICS_BIT);
-
-                if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_commandPool) != VK_SUCCESS)
-                    throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to create command pool!");
-            }
-
-            vk_utils::CreateCwapChain(physicalDevice, m_device, m_surface, WIDTH, HEIGHT, &m_screen);
-
-            vk_utils::CreateScreenImageViews(m_device, &m_screen);
+            loadMesh("vikingroom");
+            loadMesh("teddy");
+            loadMesh("magnolia");
+            loadMesh("monkey");
         }
 
-        static void LoadMesh(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue, Mesh& a_mesh, std::string a_filename)
+        static void ComposeScene(std::unordered_map<std::string, RenderObject>& a_renerables, std::unordered_map<std::string, Pipe>& a_pipes,
+                std::unordered_map<std::string, Mesh>& a_meshes)
         {
-            a_mesh.loadFromOBJ(a_filename.c_str());
+            auto createRenderable = [&](std::string&& objectName, std::string&& pipeName)
+            {
+                RenderObject object{};
 
-            //TODO: vertex normals & texture coordinates
+                {
+                    auto found{ a_meshes.find(objectName) };
+                    if (found == a_meshes.end())
+                    {
+                        throw std::runtime_error("Corresponding mesh not found for the renderagble object");
+                    }
+                    object.mesh = &(*found).second;
+                }
 
-            CreateVertexBuffer(a_device, a_physDevice, a_mesh.vertices.size() * sizeof(Vertex), &a_mesh.getVBO().buffer, &a_mesh.getVBO().memory);
+                {
+                    auto found = a_pipes.find(pipeName);
+                    if (found == a_pipes.end())
+                    {
+                        throw std::runtime_error("Corresponding pipeline not found for the renderagble object");
+                    }
+                    object.pipe = &(*found).second;
+                }
 
-            void *mappedMemory = nullptr;
+                object.transformMatrix = glm::mat4{1.f};
 
-            vkMapMemory(a_device, a_mesh.getVBO().memory, 0, a_mesh.vertices.size() * sizeof(Vertex), 0, &mappedMemory);
-            memcpy(mappedMemory, a_mesh.vertices.data(), a_mesh.vertices.size() * sizeof(Vertex));
-            vkUnmapMemory(a_device, a_mesh.getVBO().memory);
+                a_renerables[objectName] = object;
+            };
+
+            createRenderable("vikingroom", "scene");
+            createRenderable("monkey", "scene");
+        }
+
+        static void UpdateScene(std::unordered_map<std::string, RenderObject>& a_renerables)
+        {
+            glm::mat4 model{ 1.f };
+
+            {
+                model = glm::scale(model, glm::vec3(500.0f));
+                model = glm::rotate(model, glm::radians((float)sin(timer.elapsed()) * 30.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+                a_renerables["vikingroom"].transformMatrix = model;
+            }
         }
 
         void CreateResources()
         {
             std::cout << "\tcreating render pass...\n";
             CreateRenderPass(m_device, m_screen.swapChainImageFormat, &m_renderPass);
-
-            std::cout << "\tcreating graphics pipeline...\n";
-            CreateGraphicsPipeline(m_device, m_screen.swapChainExtent, m_renderPass, &m_pipelineLayout, &m_graphicsPipeline);
 
             std::cout << "\tcreating depth image...\n";
             CreateDepthImage(m_device, physicalDevice, m_depthImage, m_depthImageMemory, m_depthImageView);
@@ -251,17 +204,14 @@ class HelloTriangleApplication
             std::cout << "\tcreating sync objects...\n";
             CreateSyncObjects(m_device, &m_sync);
 
+            std::cout << "\tcreating graphics pipeline...\n";
+            CreateSceneGraphicsPipeline(m_device, m_screen.swapChainExtent, m_renderPass, m_pipes);
+
             std::cout << "\tloading meshes...\n";
+            LoadMeshes(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_meshes);
 
-            std::vector<std::string> filenames{
-                "assets/models/teapot.obj"
-            };
-
-            for (auto filename : filenames)
-            {
-                m_meshes.push_back(Mesh());
-                LoadMesh(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_meshes.back(), filename);
-            }
+            std::cout << "\tcomposing scene...\n";
+            ComposeScene(m_renerables, m_pipes, m_meshes);
 
             std::cout << "\tcreating command buffers...\n";
             CreateCommandBuffers(m_device, m_commandPool, m_screen.swapChainFramebuffers, &m_commandBuffers);
@@ -273,65 +223,11 @@ class HelloTriangleApplication
             while (!glfwWindowShouldClose(m_window)) 
             {
                 glfwPollEvents();
+                UpdateScene(m_renerables);
                 DrawFrame();
             }
 
             vkDeviceWaitIdle(m_device);
-        }
-
-        void Cleanup() 
-        { 
-            // free our meshes
-            for (auto mesh : m_meshes)
-            {
-                mesh.setDevice(m_device);
-                mesh.cleanup();
-            }
-
-            // free depth image resources
-            vkFreeMemory      (m_device, m_depthImageMemory, NULL);
-            vkDestroyImage    (m_device, m_depthImage,       NULL);
-            vkDestroyImageView(m_device, m_depthImageView,   NULL);
-
-            if (enableValidationLayers)
-            {
-                // destroy callback.
-                auto func = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(m_instance, "vkDestroyDebugReportCallbackEXT");
-                if (func == nullptr)
-                    throw std::runtime_error("Could not load vkDestroyDebugReportCallbackEXT");
-                func(m_instance, debugReportCallback, NULL);
-            }
-
-            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) 
-            {
-                vkDestroySemaphore(m_device, m_sync.renderFinishedSemaphores[i], nullptr);
-                vkDestroySemaphore(m_device, m_sync.imageAvailableSemaphores[i], nullptr);
-                vkDestroyFence    (m_device, m_sync.inFlightFences[i], nullptr);
-            }
-
-            vkDestroyCommandPool(m_device, m_commandPool, nullptr);
-
-            for (auto framebuffer : m_screen.swapChainFramebuffers) {
-                vkDestroyFramebuffer(m_device, framebuffer, nullptr);
-            }
-
-            vkDestroyPipeline      (m_device, m_graphicsPipeline, nullptr);
-            vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
-            vkDestroyRenderPass    (m_device, m_renderPass, nullptr);
-
-            for (auto imageView : m_screen.swapChainImageViews) {
-                vkDestroyImageView(m_device, imageView, nullptr);
-            }
-
-            vkDestroySwapchainKHR(m_device, m_screen.swapChain, nullptr);
-            vkDestroyDevice(m_device, nullptr);
-
-            vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
-            vkDestroyInstance(m_instance, nullptr);
-
-            glfwDestroyWindow(m_window);
-
-            glfwTerminate();
         }
 
         static void CreateRenderPass(VkDevice a_device, VkFormat a_swapChainImageFormat,
@@ -396,12 +292,11 @@ class HelloTriangleApplication
                 throw std::runtime_error("[CreateRenderPass]: failed to create render pass!");
         }
 
-        static void CreateGraphicsPipeline(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
-                VkPipelineLayout* a_pLayout, VkPipeline* a_pPipiline)
+        static void CreateSceneGraphicsPipeline(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
+                std::unordered_map<std::string, Pipe>& a_pipes)
         {
-            //auto vertShaderCode = vk_utils::ReadFile("shaders/vertex.vert.spv");
-            auto vertShaderCode = vk_utils::ReadFile("shaders/tri_mesh.vert.spv");
-            auto fragShaderCode = vk_utils::ReadFile("shaders/fragment.frag.spv");
+            auto vertShaderCode = vk_utils::ReadFile("shaders/scene.vert.spv");
+            auto fragShaderCode = vk_utils::ReadFile("shaders/scene.frag.spv");
 
             VkShaderModule vertShaderModule = vk_utils::CreateShaderModule(a_device, vertShaderCode);
             VkShaderModule fragShaderModule = vk_utils::CreateShaderModule(a_device, fragShaderCode);
@@ -501,7 +396,8 @@ class HelloTriangleApplication
             pipelineLayoutInfo.pushConstantRangeCount = pushConstants.size();
             pipelineLayoutInfo.pPushConstantRanges    = pushConstants.data();
 
-            if (vkCreatePipelineLayout(a_device, &pipelineLayoutInfo, nullptr, a_pLayout) != VK_SUCCESS)
+            VkPipelineLayout pipelineLayout{};
+            if (vkCreatePipelineLayout(a_device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
                 throw std::runtime_error("[CreateGraphicsPipeline]: failed to create pipeline layout!");
 
             VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -515,16 +411,19 @@ class HelloTriangleApplication
             pipelineInfo.pMultisampleState   = &multisampling;
             pipelineInfo.pDepthStencilState  = &depthAndStencil;
             pipelineInfo.pColorBlendState    = &colorBlending;
-            pipelineInfo.layout              = (*a_pLayout);
+            pipelineInfo.layout              = pipelineLayout;
             pipelineInfo.renderPass          = a_renderPass;
             pipelineInfo.subpass             = 0;
             pipelineInfo.basePipelineHandle  = VK_NULL_HANDLE;
 
-            if (vkCreateGraphicsPipelines(a_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, a_pPipiline) != VK_SUCCESS)
+            VkPipeline pipeline{};
+            if (vkCreateGraphicsPipelines(a_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS)
                 throw std::runtime_error("[CreateGraphicsPipeline]: failed to create graphics pipeline!");
 
             vkDestroyShaderModule(a_device, fragShaderModule, nullptr);
             vkDestroyShaderModule(a_device, vertShaderModule, nullptr);
+
+            a_pipes["scene"] = Pipe{ pipeline, pipelineLayout };
         }
 
         static void CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, vk_utils::ScreenBufferResources* pScreen,
@@ -553,20 +452,24 @@ class HelloTriangleApplication
             }
         }
 
-        static glm::mat4 camera(unsigned a_frameNumber)
+        static glm::mat4 camera()
         {
-            glm::vec3 camPos = { 0.f, 0.f, -113.f };
+            glm::vec3 cameraPos{ glm::vec3(300.0f, 300.0f, 300.0f) };
 
-            glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
-            glm::mat4 projection = glm::perspective(glm::radians(90.f), (float)WIDTH / (float)HEIGHT, 0.1f, 120.0f);
-            projection[1][1] *= -1;
-            glm::mat4 model = glm::rotate(glm::mat4{ 1.0f }, glm::radians(a_frameNumber * 0.004f), glm::vec3(0, 1, 0));
+            glm::mat4 view = glm::lookAt(
+                    cameraPos,                      //eye (cam position)
+                    glm::vec3(0.f),                 //center (where we are looking)
+                    glm::vec3(0.f, 0.f, 1.f)        //up (worlds upwards direction)
+                    );
 
-            return projection * view * model;
+            glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)WIDTH / (float)HEIGHT, 0.1f, 300.0f);
+            projection[1][1] *= -1; // vulkan coordinate space
+
+            return projection * view;
         }
 
         static void RecordCommandBuffer(VkFramebuffer a_swapChainFramebuffer, VkExtent2D a_frameBufferExtent, VkRenderPass a_renderPass,
-                VkPipeline a_graphicsPipeline, VkPipelineLayout a_layout, std::vector<Mesh> a_meshes, VkCommandBuffer a_cmdBuffer, const unsigned a_frameID) 
+                const std::unordered_map<std::string, RenderObject>& a_objects, VkCommandBuffer a_cmdBuffer) 
         {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -594,24 +497,35 @@ class HelloTriangleApplication
 
             vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_graphicsPipeline);
+            Mesh* previousMesh{nullptr};
+            Pipe* previousPipe{nullptr};
 
+            for (auto& object : a_objects)
             {
-                std::vector<VkBuffer>     vertexBuffers{ a_meshes[0].getVBO().buffer };
-                std::vector<VkDeviceSize> offsets{ 0 };
+                auto& obj{ object.second };
 
-                vkCmdBindVertexBuffers(a_cmdBuffer, 0, vertexBuffers.size(), vertexBuffers.data(), offsets.data());
-            }
+                if (obj.pipe != previousPipe)
+                {
+                    vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipeline);
+                    previousPipe = obj.pipe;
+                }
 
-            // push constants
-            {
                 MeshPushConstants constants{};
-                constants.mvp = camera(a_frameID);
+                constants.mvp = camera() * obj.transformMatrix;
+                vkCmdPushConstants(a_cmdBuffer, obj.pipe->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
 
-                vkCmdPushConstants(a_cmdBuffer, a_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
+                if (obj.mesh != previousMesh)
+                {
+                    std::vector<VkBuffer> vertexBuffers{ obj.mesh->getVBO().buffer };
+                    VkBuffer indexBuffers{ obj.mesh->getIBO().buffer };
+                    std::vector<VkDeviceSize> offsets{ 0 };
+
+                    vkCmdBindVertexBuffers(a_cmdBuffer, 0, vertexBuffers.size(), vertexBuffers.data(), offsets.data());
+                    vkCmdBindIndexBuffer(a_cmdBuffer, indexBuffers, 0, VK_INDEX_TYPE_UINT32);
+                }
+
+                vkCmdDrawIndexed(a_cmdBuffer, obj.mesh->indices.size(), 1, 0, 0, 0);
             }
-
-            vkCmdDraw(a_cmdBuffer, a_meshes[0].vertices.size(), 1, 0, 0);
 
             vkCmdEndRenderPass(a_cmdBuffer);
 
@@ -754,7 +668,10 @@ class HelloTriangleApplication
             allocateInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             allocateInfo.pNext           = nullptr;
             allocateInfo.allocationSize  = memoryRequirements.size;
-            allocateInfo.memoryTypeIndex = vk_utils::FindMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, a_physDevice);
+            allocateInfo.memoryTypeIndex = vk_utils::FindMemoryType(memoryRequirements.memoryTypeBits, 
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                    | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    a_physDevice);
 
             VK_CHECK_RESULT(vkAllocateMemory(a_device, &allocateInfo, NULL, a_pBufferMemory));
 
@@ -794,8 +711,7 @@ class HelloTriangleApplication
                 throw std::runtime_error("[DrawFrame]: failed to reset command buffer!");
             }
 
-            RecordCommandBuffer(m_screen.swapChainFramebuffers[imageIndex], m_screen.swapChainExtent, m_renderPass, m_graphicsPipeline, m_pipelineLayout,
-                    m_meshes, m_commandBuffers[imageIndex], m_frameNumber);
+            RecordCommandBuffer(m_screen.swapChainFramebuffers[imageIndex], m_screen.swapChainExtent, m_renderPass, m_renerables, m_commandBuffers[imageIndex]);
 
             VkSemaphore      waitSemaphores[]{ m_sync.imageAvailableSemaphores[m_currentFrame] };
             VkPipelineStageFlags waitStages[]{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -830,35 +746,144 @@ class HelloTriangleApplication
             presentInfo.pImageIndices   = &imageIndex;
 
             vkQueuePresentKHR(m_presentQueue, &presentInfo);
-            m_currentFrame = (m_frameNumber + 1) % MAX_FRAMES_IN_FLIGHT;
-            ++m_frameNumber;
+            m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
 
     public:
 
-        void run() 
+        Application()
         {
             std::cout << "\tinitializing window...\n";
-            InitWindow();
+            glfwInit();
+
+            glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+            glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+
+            m_window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
 
             std::cout << "\tinitializing vulkan devices and queue...\n";
-            InitVulkan();
+
+            const int deviceId = 0;
+
+            std::vector<const char*> extensions;
+            {
+                uint32_t glfwExtensionCount = 0;
+                const char** glfwExtensions;
+                glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+                extensions     = std::vector<const char*>(glfwExtensions, glfwExtensions + glfwExtensionCount);
+            }
+
+            m_instance = vk_utils::CreateInstance(enableValidationLayers, m_enabledLayers, extensions);
+            if (enableValidationLayers)
+                vk_utils::InitDebugReportCallback(m_instance, &debugReportCallbackFn, &debugReportCallback);
+
+            if (glfwCreateWindowSurface(m_instance, m_window, nullptr, &m_surface) != VK_SUCCESS)
+                throw std::runtime_error("glfwCreateWindowSurface: failed to create window surface!");
+
+            physicalDevice = vk_utils::FindPhysicalDevice(m_instance, true, deviceId);
+            auto queueFID  = vk_utils::GetQueueFamilyIndex(physicalDevice, VK_QUEUE_GRAPHICS_BIT);
+
+            VkBool32 presentSupport = false;
+            vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, queueFID, m_surface, &presentSupport);
+            if (!presentSupport)
+                throw std::runtime_error("vkGetPhysicalDeviceSurfaceSupportKHR: no present support for the target device and graphics queue");
+
+            m_device = vk_utils::CreateLogicalDevice(queueFID, physicalDevice, m_enabledLayers, deviceExtensions);
+            vkGetDeviceQueue(m_device, queueFID, 0, &m_graphicsQueue);
+            vkGetDeviceQueue(m_device, queueFID, 0, &m_presentQueue);
+
+            // ==> commandPool
+            {
+                VkCommandPoolCreateInfo poolInfo{};
+                poolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+                poolInfo.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+                poolInfo.queueFamilyIndex = vk_utils::GetQueueFamilyIndex(physicalDevice, VK_QUEUE_GRAPHICS_BIT);
+
+                if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_commandPool) != VK_SUCCESS)
+                    throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to create command pool!");
+            }
+
+            vk_utils::CreateCwapChain(physicalDevice, m_device, m_surface, WIDTH, HEIGHT, &m_screen);
+
+            vk_utils::CreateScreenImageViews(m_device, &m_screen);
+        }
+
+        ~Application() 
+        { 
+            std::cout << "\tcleaning up...\n";
+
+            // free our meshes
+            for (auto mesh : m_meshes)
+            {
+                mesh.second.setDevice(m_device);
+                mesh.second.cleanup();
+            }
+
+            // feer our pipelines
+            for (auto pipe : m_pipes)
+            {
+                vkDestroyPipeline      (m_device, pipe.second.pipeline, nullptr);
+                vkDestroyPipelineLayout(m_device, pipe.second.pipelineLayout, nullptr);
+            }
+
+            vkDestroyRenderPass    (m_device, m_renderPass, nullptr);
+
+            // free depth image resources
+            vkFreeMemory      (m_device, m_depthImageMemory, NULL);
+            vkDestroyImage    (m_device, m_depthImage,       NULL);
+            vkDestroyImageView(m_device, m_depthImageView,   NULL);
+
+            if (enableValidationLayers)
+            {
+                // destroy callback.
+                auto func = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(m_instance, "vkDestroyDebugReportCallbackEXT");
+                func(m_instance, debugReportCallback, NULL);
+            }
+
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) 
+            {
+                vkDestroySemaphore(m_device, m_sync.renderFinishedSemaphores[i], nullptr);
+                vkDestroySemaphore(m_device, m_sync.imageAvailableSemaphores[i], nullptr);
+                vkDestroyFence    (m_device, m_sync.inFlightFences[i], nullptr);
+            }
+
+            vkDestroyCommandPool(m_device, m_commandPool, nullptr);
+
+            for (auto framebuffer : m_screen.swapChainFramebuffers) {
+                vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+            }
+
+            for (auto imageView : m_screen.swapChainImageViews) {
+                vkDestroyImageView(m_device, imageView, nullptr);
+            }
+
+            vkDestroySwapchainKHR(m_device, m_screen.swapChain, nullptr);
+            vkDestroyDevice(m_device, nullptr);
+
+            vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+            vkDestroyInstance(m_instance, nullptr);
+
+            glfwDestroyWindow(m_window);
+
+            glfwTerminate();
+        }
+
+
+        void run() 
+        {
             CreateResources();
 
             std::cout << "\tlaunching main loop...\n";
             MainLoop();
-
-            std::cout << "\tcleaning up...\n";
-            Cleanup();
         }
 };
 
 int main() 
 {
-    HelloTriangleApplication app;
-
     try 
     {
+        Application app{};
+
         app.run();
     }
     catch (const std::exception& e) 
