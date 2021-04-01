@@ -18,6 +18,7 @@ set(ALL_LIBS ${ALL_LIBS} ${GLFW_LIBRARIES} )
 include_directories(${GLFW_INCLUDE_DIRS}
     src/vendor/glm
     src/vendor/tinyobjloader
+    src/vendor/cpptqdm
     )
 
 #uncomment this to detect broken memory problems via gcc sanitizers

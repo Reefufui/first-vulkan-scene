@@ -94,6 +94,10 @@ class Application
         std::unordered_map<std::string, Pipe>         m_pipes;
         std::unordered_map<std::string, Mesh>         m_meshes;
 
+        struct UBO {
+            glm::mat4 mvp;
+        };
+
         static VKAPI_ATTR VkBool32 VKAPI_CALL debugReportCallbackFn(
                 VkDebugReportFlagsEXT                       flags,
                 VkDebugReportObjectTypeEXT                  objectType,
@@ -116,7 +120,7 @@ class Application
             {
                 Mesh mesh{};
 
-                std::string fileName{ "assets/models/.obj" };
+                std::string fileName{ "assets/meshes/.obj" };
                 fileName.insert(fileName.find("."), meshName);
                 mesh.loadFromOBJ(fileName.c_str());
                 CreateVertexBuffer(a_device, a_physDevice, mesh.vertices.size() * sizeof(Vertex), &mesh.getVBO().buffer, &mesh.getVBO().memory);
@@ -138,10 +142,7 @@ class Application
                 a_meshes[meshName] = mesh;
             };
 
-            loadMesh("vikingroom");
-            loadMesh("teddy");
-            loadMesh("magnolia");
-            loadMesh("monkey");
+            loadMesh("terrain");
         }
 
         static void ComposeScene(std::unordered_map<std::string, RenderObject>& a_renerables, std::unordered_map<std::string, Pipe>& a_pipes,
@@ -174,8 +175,7 @@ class Application
                 a_renerables[objectName] = object;
             };
 
-            createRenderable("vikingroom", "scene");
-            createRenderable("monkey", "scene");
+            createRenderable("terrain", "scene");
         }
 
         static void UpdateScene(std::unordered_map<std::string, RenderObject>& a_renerables)
@@ -183,10 +183,10 @@ class Application
             glm::mat4 model{ 1.f };
 
             {
-                model = glm::scale(model, glm::vec3(500.0f));
-                model = glm::rotate(model, glm::radians((float)sin(timer.elapsed()) * 30.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+                model = glm::scale(model, glm::vec3(80.f));
+                model = glm::rotate(model, glm::radians((float)sin(timer.elapsed() / 10) * 360.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
-                a_renerables["vikingroom"].transformMatrix = model;
+                a_renerables["terrain"].transformMatrix = model;
             }
         }
 
@@ -203,6 +203,9 @@ class Application
 
             std::cout << "\tcreating sync objects...\n";
             CreateSyncObjects(m_device, &m_sync);
+
+            std::cout << "\tcreating descriptor sets...\n";
+            CreateSceneDescriptorSetLayout();
 
             std::cout << "\tcreating graphics pipeline...\n";
             CreateSceneGraphicsPipeline(m_device, m_screen.swapChainExtent, m_renderPass, m_pipes);
@@ -290,6 +293,10 @@ class Application
 
             if (vkCreateRenderPass(a_device, &renderPassInfo, nullptr, a_pRenderPass) != VK_SUCCESS)
                 throw std::runtime_error("[CreateRenderPass]: failed to create render pass!");
+        }
+
+        static void CreateSceneDescriptorSetLayout()
+        {
         }
 
         static void CreateSceneGraphicsPipeline(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
@@ -459,10 +466,10 @@ class Application
             glm::mat4 view = glm::lookAt(
                     cameraPos,                      //eye (cam position)
                     glm::vec3(0.f),                 //center (where we are looking)
-                    glm::vec3(0.f, 0.f, 1.f)        //up (worlds upwards direction)
+                    glm::vec3(0.f, 1.f, 0.f)        //up (worlds upwards direction)
                     );
 
-            glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)WIDTH / (float)HEIGHT, 0.1f, 300.0f);
+            glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)WIDTH / (float)HEIGHT, 0.1f, 700.0f);
             projection[1][1] *= -1; // vulkan coordinate space
 
             return projection * view;

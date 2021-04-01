@@ -1,4 +1,5 @@
 #include "Mesh.hpp"
+#include "tqdm.h"
 
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
@@ -58,8 +59,14 @@ void Mesh::loadFromOBJ(const char* a_filename)
 
     for (const auto& shape : shapes)
     {
+        tqdm bar{};
+        bar.set_theme_line();
+        bar.set_label(std::string("Loading ") + a_filename);
+        int i{};
+
         for (const auto& index : shape.mesh.indices)
         {
+            bar.progress(i++, shape.mesh.indices.size());
             Vertex vertex{};
 
             /////////////////////////////////////////////////////////////
@@ -103,6 +110,8 @@ void Mesh::loadFromOBJ(const char* a_filename)
 
             indices.push_back(uniqueVertices[vertex]);
         }
+
+        bar.finish();
     }
 }
 
