@@ -20,8 +20,13 @@ struct MeshPushConstants {
 
 struct Vertex {
     glm::vec3 position{};
-    glm::vec3 normal{};
     glm::vec3 color{};
+    glm::vec3 normal{};
+    glm::vec2 uv{};
+
+    bool operator==(const Vertex& other) const {
+        return position == other.position && normal == other.normal && uv == other.uv;
+    }
 
     static VertexInputDescription getVertexDescription()
     {
@@ -37,9 +42,10 @@ struct Vertex {
         std::vector<VkVertexInputAttributeDescription> vAttributes {
             // location, binding, format, offset
 
-            { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position) }, //position
-                { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)   }, //normal
-                { 2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)    }  //color
+            { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position) },
+                { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color) },
+                { 2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal) },
+                { 3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv) }
         };
 
         description.attributes = vAttributes;
@@ -62,7 +68,8 @@ class Mesh {
 
     public:
 
-        std::vector<Vertex> vertices{};
+        std::vector<Vertex>   vertices{};
+        std::vector<uint32_t> indices{};
 
         Buffer& getVBO() { return m_vbo; }
         Buffer& getIBO() { return m_ibo; }

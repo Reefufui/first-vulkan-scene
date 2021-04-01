@@ -1,6 +1,5 @@
 # This file uses centimeters as units for non-parametric coordinates.
 
-mtllib monkey.mtl
 g default
 v -1.336843 0.468884 0.237478
 v -0.893695 0.137550 0.305373
@@ -1330,7 +1329,6 @@ vn 0.378417 0.801119 0.463690
 vn 0.378417 0.801119 0.463690
 s off
 g pCube1
-usemtl lambert2SG
 f 71/289/1 72/81/2 73/82/3 74/83/4
 s 2
 f 2/244/5 3/3/6 13/18/7 14/242/8

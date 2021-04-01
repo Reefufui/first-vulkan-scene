@@ -4,6 +4,22 @@
 #include <tiny_obj_loader.h>
 #include <iostream>
 #include <vector>
+#include <unordered_map>
+#include <random>
+
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/hash.hpp>
+
+namespace std
+{
+    template<> struct hash<Vertex>
+    {
+        size_t operator()(Vertex const& vertex) const
+        {
+            return ((hash<glm::vec3>()(vertex.position) ^ (hash<glm::vec3>()(vertex.normal) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.uv) << 1);
+        }
+    };
+}
 
 void Mesh::loadFromOBJ(const char* a_filename)
 {
@@ -13,6 +29,10 @@ void Mesh::loadFromOBJ(const char* a_filename)
 
     std::string warn{};
     std::string err{};
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(0.8, 1.0); // dis(gen)
 
     tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, a_filename, nullptr);
 
@@ -26,48 +46,62 @@ void Mesh::loadFromOBJ(const char* a_filename)
         throw std::runtime_error(err.c_str());
     }
 
-    for (auto shape : shapes)
+    if (!attrib.vertices.size())
     {
-        // Loop over faces(polygon)
-        size_t indexOffset{};
+        throw std::runtime_error("Missing vertices in obj file");
+    }
 
-        for (size_t f{}; f < shape.mesh.num_face_vertices.size(); f++)
+    std::unordered_map<Vertex, uint32_t> uniqueVertices{};
+
+    bool hasNormals       { attrib.normals.size() != 0 };
+    bool hasTextureCoords { attrib.texcoords.size() != 0 };
+
+    for (const auto& shape : shapes)
+    {
+        for (const auto& index : shape.mesh.indices)
         {
-            //hardcode loading to triangles
-            int fv = 3;
+            Vertex vertex{};
 
-            // Loop over vertices in the face.
-            for (size_t v = 0; v < fv; v++)
-            {                
-                // access to vertex
-                tinyobj::index_t idx = shape.mesh.indices[indexOffset + v];
+            /////////////////////////////////////////////////////////////
+            vertex.position = {
+                attrib.vertices[3 * index.vertex_index + 0],
+                attrib.vertices[3 * index.vertex_index + 1],
+                attrib.vertices[3 * index.vertex_index + 2]
+            };
 
-                //vertex position
-                tinyobj::real_t vx = attrib.vertices[3 * idx.vertex_index + 0];
-                tinyobj::real_t vy = attrib.vertices[3 * idx.vertex_index + 1];
-                tinyobj::real_t vz = attrib.vertices[3 * idx.vertex_index + 2];
-                //vertex normal
-                tinyobj::real_t nx = attrib.normals[3 * idx.normal_index + 0];
-                tinyobj::real_t ny = attrib.normals[3 * idx.normal_index + 1];
-                tinyobj::real_t nz = attrib.normals[3 * idx.normal_index + 2];
+            /////////////////////////////////////////////////////////////
+            vertex.color = { 0.58f, 0.29f, 0.0f }; //brown
+            /////////////////////////////////////////////////////////////
 
-                //copy it into our vertex
-                Vertex new_vert;
-                new_vert.position.x = vx;
-                new_vert.position.y = vy;
-                new_vert.position.z = vz;
-
-                new_vert.normal.x = nx;
-                new_vert.normal.y = ny;
-                new_vert.normal.z = nz;
-
-                //we are setting the vertex color as the vertex normal. This is just for display purposes
-                new_vert.color = new_vert.normal;
-
-                vertices.push_back(new_vert);
+            if (hasNormals)
+            {
+                vertex.normal = {
+                    attrib.normals[3 * index.normal_index + 0],
+                    attrib.normals[3 * index.normal_index + 1],
+                    attrib.normals[3 * index.normal_index + 2]
+                };
+            }
+            else
+            {
+                vertex.normal = glm::vec3(1.0f);
             }
 
-            indexOffset += fv;
+            if (hasTextureCoords)
+            {
+                vertex.uv = {
+                    attrib.texcoords[2 * index.vertex_index + 0],
+                    1.0f - attrib.texcoords[2 * index.vertex_index + 1]
+                };
+            }
+
+
+            if (!uniqueVertices.count(vertex))
+            {
+                uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+                vertices.push_back(vertex);
+            }
+
+            indices.push_back(uniqueVertices[vertex]);
         }
     }
 }
@@ -89,3 +123,4 @@ void Mesh::cleanup()
         }
     }
 }
+
