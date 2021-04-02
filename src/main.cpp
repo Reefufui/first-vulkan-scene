@@ -83,32 +83,35 @@ class Application
         struct Pipe {
             VkPipeline                    pipeline;
             VkPipelineLayout              pipelineLayout;
-            std::vector<VkDescriptorPool> descriptorPools;
+        };
+
+        struct InputTexture {
+            Texture*                      texture;
+            VkDescriptorPool              descriptorPool;
             std::vector<VkDescriptorSet>  descriptorSets;
         };
 
         struct RenderObject {
-            Mesh*     mesh;
-            Pipe*     pipe;
-            Texture*  texture;
-            glm::mat4 transformMatrix;
+            Mesh*          mesh;
+            Pipe*          pipe;
+            InputTexture*  texture;
+            glm::mat4      matrix;
         };
 
         std::unordered_map<std::string, RenderObject> m_renerables;
         std::unordered_map<std::string, Pipe>         m_pipes;
         std::unordered_map<std::string, Mesh>         m_meshes;
         std::unordered_map<std::string, Texture>      m_textures;
+        std::unordered_map<std::string, InputTexture> m_inputTextures;
 
         struct UBO {
             glm::mat4 mvp;
         };
 
         VkDescriptorSetLayout m_sceneDSLayout;
-        VkDescriptorPool      m_sceneDSPool;
 
         std::vector<VkBuffer>        m_uniformBuffers;
         std::vector<VkDeviceMemory>  m_uniformBuffersMemory;
-        std::vector<VkDescriptorSet> m_sceneDS;
 
         static VKAPI_ATTR VkBool32 VKAPI_CALL debugReportCallbackFn(
                 VkDebugReportFlagsEXT                       flags,
@@ -167,7 +170,7 @@ class Application
             };
 
             loadMesh("terrain");
-            loadMesh("viking_room");
+            loadMesh("fireleviathan");
         }
 
         static void LoadTextures(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
@@ -209,14 +212,14 @@ class Application
             };
 
             loadTexture("terrain");
-            //loadTexture("viking_room");
+            loadTexture("fireleviathan");
         }
 
 
         static void ComposeScene(std::unordered_map<std::string, RenderObject>& a_renerables, std::unordered_map<std::string, Pipe>& a_pipes,
-                std::unordered_map<std::string, Mesh>& a_meshes, std::unordered_map<std::string, Texture>& a_textures)
+                std::unordered_map<std::string, Mesh>& a_meshes, std::unordered_map<std::string, InputTexture>& a_textures)
         {
-            auto createRenderable = [&](std::string&& objectName, std::string&& meshName, std::string&& pipeName)
+            auto createRenderable = [&](std::string&& objectName, std::string&& meshName, std::string&& pipeName, std::string&& textureName)
             {
                 RenderObject object{};
 
@@ -224,7 +227,7 @@ class Application
                     auto found{ a_meshes.find(meshName) };
                     if (found == a_meshes.end())
                     {
-                        throw std::runtime_error(std::string("Mesh not found: ") + objectName);
+                        throw std::runtime_error(std::string("Mesh not found: ") + meshName);
                     }
                     object.mesh = &(*found).second;
                 }
@@ -233,31 +236,45 @@ class Application
                     auto found = a_pipes.find(pipeName);
                     if (found == a_pipes.end())
                     {
-                        throw std::runtime_error(std::string("Pipeline not found: ") + objectName);
+                        throw std::runtime_error(std::string("Pipeline not found: ") + pipeName);
                     }
                     object.pipe = &(*found).second;
                 }
 
-                object.transformMatrix = glm::mat4{1.f};
+                {
+                    auto found = a_textures.find(textureName);
+                    if (found == a_textures.end())
+                    {
+                        throw std::runtime_error(std::string("Texture not found: ") + textureName);
+                    }
+                    object.texture = &(*found).second;
+                }
+
+                object.matrix = glm::mat4(1.0f);
 
                 a_renerables[objectName] = object;
             };
 
-            // tag, mesh, pipeline, texture
-            createRenderable("terrain", "terrain", "scene");
-            createRenderable("viking_room", "viking_room", "scene");
+            createRenderable("fireleviathan", "fireleviathan", "scene", "fireleviathan");
+            {
+                glm::mat4& m{ a_renerables["fireleviathan"].matrix };
+
+                m = glm::translate(m, glm::vec3(0.0f, 15.0f, 7.0f));
+                m = glm::rotate(m, glm::radians(180.0f), glm::vec3(0, 1, 0));
+            }
+            createRenderable("terrain", "terrain", "scene", "terrain");
         }
 
         static void UpdateScene(std::unordered_map<std::string, RenderObject>& a_renerables)
         {
-            glm::mat4 model{ 1.f };
-
             {
-                model = glm::scale(model, glm::vec3(80.f));
-                model = glm::rotate(model, glm::radians((float)sin(timer.elapsed() / 50) * 360.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                glm::mat4 m{1.0f};
 
-                a_renerables["terrain"].transformMatrix = model;
-                a_renerables["viking_room"].transformMatrix = model;
+                m = glm::scale(m, glm::vec3(1.0f, 1.0f + 0.1 * (float)sin(timer.elapsed()), 1.0f));
+                m = glm::translate(m, glm::vec3(0.0f, 15.0f, 7.0f));
+                m = glm::rotate(m, glm::radians(180.0f), glm::vec3(0, 1, 0));
+
+                a_renerables["fireleviathan"].matrix = m;
             }
         }
 
@@ -283,17 +300,17 @@ class Application
 
             std::cout << "\tcreating descriptor sets...\n";
             CreateSceneDescriptorSetLayout(m_device, &m_sceneDSLayout);
-            CreateDSForEachTexture(m_device, m_uniformBuffers, sizeof(UBO), &m_sceneDSLayout, &m_sceneDSPool, m_sceneDS,
-                    m_screen.swapChainImageViews.size(), m_textures);
+            CreateDSForEachTexture(m_device, m_uniformBuffers, sizeof(UBO), &m_sceneDSLayout, m_inputTextures, m_textures,
+                    m_screen.swapChainImageViews.size());
 
             std::cout << "\tcreating graphics pipeline...\n";
-            CreatePipelines(m_device, m_screen.swapChainExtent, m_renderPass, m_pipes, m_textures, m_sceneDSLayout);
+            CreatePipelines(m_device, m_screen.swapChainExtent, m_renderPass, m_pipes, m_sceneDSLayout);
 
             std::cout << "\tloading meshes...\n";
             LoadMeshes(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_meshes);
 
             std::cout << "\tcomposing scene...\n";
-            ComposeScene(m_renerables, m_pipes, m_meshes, m_textures);
+            ComposeScene(m_renerables, m_pipes, m_meshes, m_inputTextures);
 
             std::cout << "\tcreating command buffers...\n";
             CreateCommandBuffers(m_device, m_commandPool, m_screen.swapChainFramebuffers, &m_commandBuffers);
@@ -463,15 +480,21 @@ class Application
             }
         }
 
-        static void CreateDSForEachTexture(VkDevice a_device, std::vector<VkBuffer>& a_buffer, size_t a_bufferSize, const VkDescriptorSetLayout *a_pDSLayout,
-                VkDescriptorPool *a_pDSPool, std::vector<VkDescriptorSet>& a_dsets, size_t a_count, std::unordered_map<std::string, Texture>& a_textures)
+        static void CreateDSForEachTexture(VkDevice a_device, std::vector<VkBuffer>& a_buffer, size_t a_bufferSize, VkDescriptorSetLayout* a_pDSLayout,
+                std::unordered_map<std::string, InputTexture>& a_inputTextures, std::unordered_map<std::string, Texture>& a_textures, size_t a_count)
         {
             for (auto& texture : a_textures)
             {
-                std::string textureName{ texture.first };
-                Texture     textureObj{ texture.second };
-                CreateDescriptorSet(a_device, a_buffer, a_bufferSize, a_pDSLayout, a_pDSPool, a_dsets, a_count,
-                        textureObj.getImageView(), textureObj.getSampler());
+                Texture*    pTextureObj{ &texture.second };
+
+                VkDescriptorPool              pPool{ nullptr };
+                std::vector<VkDescriptorSet>  dSets{};
+
+                CreateDescriptorSet(a_device, a_buffer, a_bufferSize, a_pDSLayout, &pPool, dSets, a_count,
+                        pTextureObj->getImageView(), pTextureObj->getSampler());
+
+                a_inputTextures[texture.first] = { pTextureObj, pPool, dSets };
+
             }
         }
 
@@ -611,8 +634,7 @@ class Application
         }
 
         static void CreatePipelines(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
-                std::unordered_map<std::string, Pipe>& a_pipes, std::unordered_map<std::string, Texture>& a_textures,
-                VkDescriptorSetLayout a_dsLayout)
+                std::unordered_map<std::string, Pipe>& a_pipes, VkDescriptorSetLayout a_dsLayout)
         {
             CreateGraphicsPipeline(a_device, a_screenExtent, a_renderPass, a_pipes, a_dsLayout);
         }
@@ -645,16 +667,16 @@ class Application
 
         static glm::mat4 camera()
         {
-            glm::vec3 cameraPos{ glm::vec3(300.0f, 300.0f, 300.0f) };
+            glm::vec3 cameraPos{ glm::vec3(8.0f, 3.5f, -12.0f) };
 
             glm::mat4 view = glm::lookAt(
                     cameraPos,                      //eye (cam position)
-                    glm::vec3(0.f),                 //center (where we are looking)
+                    glm::vec3(02.5f, 0.0f, 0.0f),   //center (where we are looking)
                     glm::vec3(0.f, 1.f, 0.f)        //up (worlds upwards direction)
                     );
 
-            glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)WIDTH / (float)HEIGHT, 0.1f, 700.0f);
-            projection[1][1] *= -1; // vulkan coordinate space
+            glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)WIDTH / (float)HEIGHT, 0.1f, 50.0f);
+            projection[1][1] *= -1; // vulkan coordinate space workaround
 
             return projection * view;
         }
@@ -672,7 +694,7 @@ class Application
 
         static void RecordCommandBuffer(VkDevice a_device, VkFramebuffer a_swapChainFramebuffer, VkExtent2D a_frameBufferExtent, VkRenderPass a_renderPass,
                 const std::unordered_map<std::string, RenderObject>& a_objects, VkBuffer& a_ubo, VkDeviceMemory& a_uboMem, VkCommandBuffer a_cmdBuffer,
-                VkDescriptorSet a_descrSet, size_t a_frameID) 
+                size_t a_frameID) 
         {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -683,7 +705,7 @@ class Application
 
             VkClearValue colorClear;
             //colorClear.color = { {  1.0f, 0.7f, 0.6f, 1.0f } };
-            colorClear.color = { {  0.0f, 0.0f, 0.0f, 0.0f } };
+            colorClear.color = { {  1.0f, 0.55f, 0.15f, 1.0f } };
 
             VkClearValue depthClear;
             depthClear.depthStencil.depth = 1.f;
@@ -711,16 +733,16 @@ class Application
                 if (obj.pipe != previousPipe)
                 {
                     vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipeline);
-                    vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipelineLayout, 0, 1, &a_descrSet, 0, nullptr);
-                    //vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipelineLayout, 0, 1,
-                    //&(obj.pipe->descriptorSets[a_frameID]), 0, nullptr);
                     previousPipe = obj.pipe;
                 }
 
-                MeshPushConstants constants{};
-                constants.mvp = camera() * obj.transformMatrix;
+                UpdateUniformBuffer(a_device, a_ubo, a_uboMem, obj.matrix);
 
-                UpdateUniformBuffer(a_device, a_ubo, a_uboMem, obj.transformMatrix);
+                vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipelineLayout, 0, 1,
+                        &(obj.texture->descriptorSets[a_frameID]), 0, nullptr);
+
+                MeshPushConstants constants{};
+                constants.mvp = camera() * obj.matrix;
 
                 vkCmdPushConstants(a_cmdBuffer, obj.pipe->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
 
@@ -1078,8 +1100,7 @@ class Application
             }
 
             RecordCommandBuffer(m_device, m_screen.swapChainFramebuffers[imageIndex], m_screen.swapChainExtent, m_renderPass, m_renerables,
-                    m_uniformBuffers[imageIndex], m_uniformBuffersMemory[imageIndex], m_commandBuffers[imageIndex], m_sceneDS[imageIndex],
-                    imageIndex);
+                    m_uniformBuffers[imageIndex], m_uniformBuffersMemory[imageIndex], m_commandBuffers[imageIndex], imageIndex);
 
             VkSemaphore      waitSemaphores[]{ m_sync.imageAvailableSemaphores[m_currentFrame] };
             VkPipelineStageFlags waitStages[]{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -1197,8 +1218,12 @@ class Application
                 vkDestroyPipelineLayout(m_device, pipe.second.pipelineLayout, nullptr);
             }
 
+            for (auto inTex : m_inputTextures)
+            {
+                vkDestroyDescriptorPool(m_device, inTex.second.descriptorPool, nullptr);
+            }
+
             vkDestroyDescriptorSetLayout(m_device, m_sceneDSLayout, nullptr);
-            vkDestroyDescriptorPool(m_device, m_sceneDSPool, nullptr);
 
             for (auto& uboMem : m_uniformBuffersMemory)
             {

@@ -15,14 +15,15 @@ layout(binding = 0) uniform UniformBufferObject
 
 layout( push_constant ) uniform constants
 {
-	vec4 data;
-	mat4 mvp;
+    vec4 data;
+    mat4 mvp;
 } PushConstants;
 
 void main() 
 {	
-	gl_Position = ubo.mvp * vec4(vPosition, 1.0f) + vec4(-4.0f + 4 * float(gl_InstanceIndex), .0f, .0f, 1.0f);
-	fColor = vNormal;
+    fColor = vNormal;
     fTexCoord = vUVCoord;
+
+    gl_Position = PushConstants.mvp * vec4(vPosition, 1.0f);
 }
 
