@@ -19,6 +19,7 @@ include_directories(${GLFW_INCLUDE_DIRS}
     src/vendor/glm
     src/vendor/tinyobjloader
     src/vendor/cpptqdm
+    src/vendor/stb_image
     )
 
 #uncomment this to detect broken memory problems via gcc sanitizers
@@ -32,6 +33,9 @@ add_executable(vulkan_shadow_map
     src/vk_utils.cpp
     src/Mesh.hpp
     src/Mesh.cpp
+    src/Texture.cpp
+    src/Texture.hpp
+    src/vendor/stb_image/stb_image.cpp
     )
 
 set_target_properties(vulkan_shadow_map PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")

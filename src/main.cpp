@@ -23,6 +23,7 @@
 
 #include "vk_utils.h"
 #include "Mesh.hpp"
+#include "Texture.hpp"
 #include "Timer.hpp"
 
 const int WIDTH  = 800;
@@ -80,19 +81,23 @@ class Application
         size_t m_currentFrame{};
 
         struct Pipe {
-            VkPipeline       pipeline;
-            VkPipelineLayout pipelineLayout;
+            VkPipeline                    pipeline;
+            VkPipelineLayout              pipelineLayout;
+            std::vector<VkDescriptorPool> descriptorPools;
+            std::vector<VkDescriptorSet>  descriptorSets;
         };
 
         struct RenderObject {
-            Mesh* mesh;
-            Pipe* pipe;
+            Mesh*     mesh;
+            Pipe*     pipe;
+            Texture*  texture;
             glm::mat4 transformMatrix;
         };
 
         std::unordered_map<std::string, RenderObject> m_renerables;
         std::unordered_map<std::string, Pipe>         m_pipes;
         std::unordered_map<std::string, Mesh>         m_meshes;
+        std::unordered_map<std::string, Texture>      m_textures;
 
         struct UBO {
             glm::mat4 mvp;
@@ -162,20 +167,64 @@ class Application
             };
 
             loadMesh("terrain");
+            loadMesh("viking_room");
         }
 
-        static void ComposeScene(std::unordered_map<std::string, RenderObject>& a_renerables, std::unordered_map<std::string, Pipe>& a_pipes,
-                std::unordered_map<std::string, Mesh>& a_meshes)
+        static void LoadTextures(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
+                std::unordered_map<std::string, Texture>& a_textures)
         {
-            auto createRenderable = [&](std::string&& objectName, std::string&& pipeName)
+            auto fillTexture = [&](VkImage a_image, VkDeviceMemory& a_memory, void* a_src, size_t a_size, uint32_t a_w, uint32_t a_h)
+            {
+                VkBuffer stagingBuffer{};
+                VkDeviceMemory stagingBufferMemory{};
+
+                CreateHostVisibleBuffer(a_device, a_physDevice, a_size, &stagingBuffer, &stagingBufferMemory);
+
+                void *mappedMemory = nullptr;
+                vkMapMemory(a_device, stagingBufferMemory, 0, a_size, 0, &mappedMemory);
+                memcpy(mappedMemory, a_src, a_size);
+                vkUnmapMemory(a_device, stagingBufferMemory);
+
+                CopyBufferToTexure(a_device, a_pool, a_queue, stagingBuffer, a_image, a_w, a_h);
+
+                vkFreeMemory(a_device, stagingBufferMemory, nullptr);
+                vkDestroyBuffer(a_device, stagingBuffer, nullptr);
+            };
+
+            auto loadTexture = [&](std::string&& textureName)
+            {
+                Texture texture{};
+
+                std::string fileName{ "assets/textures/.jpg" };
+                fileName.insert(fileName.find("."), textureName);
+
+                texture.loadFromJPG(fileName.c_str());
+
+                texture.create(a_device, a_physDevice);
+
+                fillTexture(texture.getImage(), *texture.getpMemory(), (void*)texture.rgba, (size_t)texture.getSize(),
+                        (uint32_t)texture.getWidth(), (uint32_t)texture.getHeight());
+
+                a_textures[textureName] = texture;
+            };
+
+            loadTexture("terrain");
+            //loadTexture("viking_room");
+        }
+
+
+        static void ComposeScene(std::unordered_map<std::string, RenderObject>& a_renerables, std::unordered_map<std::string, Pipe>& a_pipes,
+                std::unordered_map<std::string, Mesh>& a_meshes, std::unordered_map<std::string, Texture>& a_textures)
+        {
+            auto createRenderable = [&](std::string&& objectName, std::string&& meshName, std::string&& pipeName)
             {
                 RenderObject object{};
 
                 {
-                    auto found{ a_meshes.find(objectName) };
+                    auto found{ a_meshes.find(meshName) };
                     if (found == a_meshes.end())
                     {
-                        throw std::runtime_error("Corresponding mesh not found for the renderagble object");
+                        throw std::runtime_error(std::string("Mesh not found: ") + objectName);
                     }
                     object.mesh = &(*found).second;
                 }
@@ -184,7 +233,7 @@ class Application
                     auto found = a_pipes.find(pipeName);
                     if (found == a_pipes.end())
                     {
-                        throw std::runtime_error("Corresponding pipeline not found for the renderagble object");
+                        throw std::runtime_error(std::string("Pipeline not found: ") + objectName);
                     }
                     object.pipe = &(*found).second;
                 }
@@ -194,7 +243,9 @@ class Application
                 a_renerables[objectName] = object;
             };
 
-            createRenderable("terrain", "scene");
+            // tag, mesh, pipeline, texture
+            createRenderable("terrain", "terrain", "scene");
+            createRenderable("viking_room", "viking_room", "scene");
         }
 
         static void UpdateScene(std::unordered_map<std::string, RenderObject>& a_renerables)
@@ -203,9 +254,10 @@ class Application
 
             {
                 model = glm::scale(model, glm::vec3(80.f));
-                model = glm::rotate(model, glm::radians((float)sin(timer.elapsed() / 10) * 360.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                model = glm::rotate(model, glm::radians((float)sin(timer.elapsed() / 50) * 360.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
                 a_renerables["terrain"].transformMatrix = model;
+                a_renerables["viking_room"].transformMatrix = model;
             }
         }
 
@@ -226,18 +278,22 @@ class Application
             std::cout << "\tcreating uniform buffers...\n";
             CreateUniformBuffers(m_device, physicalDevice, sizeof(UBO), m_uniformBuffers, m_uniformBuffersMemory, m_screen.swapChainImageViews.size());
 
+            std::cout << "\tloading textures...\n";
+            LoadTextures(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_textures);
+
             std::cout << "\tcreating descriptor sets...\n";
             CreateSceneDescriptorSetLayout(m_device, &m_sceneDSLayout);
-            CreateDescriptorSet(m_device, m_uniformBuffers, sizeof(UBO), &m_sceneDSLayout, &m_sceneDSPool, m_sceneDS, m_screen.swapChainImageViews.size());
+            CreateDSForEachTexture(m_device, m_uniformBuffers, sizeof(UBO), &m_sceneDSLayout, &m_sceneDSPool, m_sceneDS,
+                    m_screen.swapChainImageViews.size(), m_textures);
 
             std::cout << "\tcreating graphics pipeline...\n";
-            CreateSceneGraphicsPipeline(m_device, m_screen.swapChainExtent, m_renderPass, m_pipes, m_sceneDSLayout);
+            CreatePipelines(m_device, m_screen.swapChainExtent, m_renderPass, m_pipes, m_textures, m_sceneDSLayout);
 
             std::cout << "\tloading meshes...\n";
             LoadMeshes(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_meshes);
 
             std::cout << "\tcomposing scene...\n";
-            ComposeScene(m_renerables, m_pipes, m_meshes);
+            ComposeScene(m_renerables, m_pipes, m_meshes, m_textures);
 
             std::cout << "\tcreating command buffers...\n";
             CreateCommandBuffers(m_device, m_commandPool, m_screen.swapChainFramebuffers, &m_commandBuffers);
@@ -320,35 +376,45 @@ class Application
 
         static void CreateSceneDescriptorSetLayout(VkDevice a_device, VkDescriptorSetLayout *a_pDSLayout)
         {
-            VkDescriptorSetLayoutBinding descriptorSetLayoutBinding{};
+            VkDescriptorSetLayoutBinding uboLayoutBinding{};
+            uboLayoutBinding.binding            = 0;
+            uboLayoutBinding.descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            uboLayoutBinding.descriptorCount    = 1;
+            uboLayoutBinding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+            uboLayoutBinding.pImmutableSamplers = nullptr;
 
-            descriptorSetLayoutBinding.binding            = 0;
-            descriptorSetLayoutBinding.descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            descriptorSetLayoutBinding.descriptorCount    = 1;
-            descriptorSetLayoutBinding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
-            descriptorSetLayoutBinding.pImmutableSamplers = nullptr;
+            VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+            samplerLayoutBinding.binding            = 1;
+            samplerLayoutBinding.descriptorType     = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            samplerLayoutBinding.descriptorCount    = 1;
+            samplerLayoutBinding.stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
+            samplerLayoutBinding.pImmutableSamplers = nullptr;
+
+            std::array<VkDescriptorSetLayoutBinding, 2> binds = {uboLayoutBinding, samplerLayoutBinding};
 
             VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo{};
             descriptorSetLayoutCreateInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            descriptorSetLayoutCreateInfo.bindingCount = 1;
-            descriptorSetLayoutCreateInfo.pBindings    = &descriptorSetLayoutBinding;
+            descriptorSetLayoutCreateInfo.bindingCount = binds.size();
+            descriptorSetLayoutCreateInfo.pBindings    = binds.data();
 
             if (vkCreateDescriptorSetLayout(a_device, &descriptorSetLayoutCreateInfo, nullptr, a_pDSLayout) != VK_SUCCESS)
                 throw std::runtime_error("[CreateSceneDescriptorSetLayout]: failed to create DS layout!");
         }
 
         static void CreateDescriptorSet(VkDevice a_device, std::vector<VkBuffer>& a_buffer, size_t a_bufferSize, const VkDescriptorSetLayout *a_pDSLayout,
-                VkDescriptorPool *a_pDSPool, std::vector<VkDescriptorSet>& a_dsets, size_t a_count)
+                VkDescriptorPool *a_pDSPool, std::vector<VkDescriptorSet>& a_dsets, size_t a_count, VkImageView a_imageView, VkSampler a_imageSampler)
         {
-            VkDescriptorPoolSize descriptorPoolSize{};
-            descriptorPoolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            descriptorPoolSize.descriptorCount = a_count;
+            std::array<VkDescriptorPoolSize, 2> descriptorPoolSizes{};
+            descriptorPoolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorPoolSizes[0].descriptorCount = a_count;
+            descriptorPoolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptorPoolSizes[1].descriptorCount = a_count;
 
             VkDescriptorPoolCreateInfo descriptorPoolCreateInfo{};
             descriptorPoolCreateInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
             descriptorPoolCreateInfo.maxSets       = a_count;
-            descriptorPoolCreateInfo.poolSizeCount = 1;
-            descriptorPoolCreateInfo.pPoolSizes    = &descriptorPoolSize;
+            descriptorPoolCreateInfo.poolSizeCount = descriptorPoolSizes.size();
+            descriptorPoolCreateInfo.pPoolSizes    = descriptorPoolSizes.data();
 
             if (vkCreateDescriptorPool(a_device, &descriptorPoolCreateInfo, NULL, a_pDSPool) != VK_SUCCESS)
                 throw std::runtime_error("[CreateDescriptorSet]: failed to create descriptor set pool!");
@@ -371,22 +437,45 @@ class Application
                 bufferInfo.buffer = a_buffer[i];
                 bufferInfo.range = a_bufferSize;
 
-                VkWriteDescriptorSet descrWrite{};
-                descrWrite.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                descrWrite.dstSet            = a_dsets[i];
-                descrWrite.dstBinding        = 0;
-                descrWrite.dstArrayElement   = 0;
-                descrWrite.descriptorType    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                descrWrite.descriptorCount   = 1;
-                descrWrite.pBufferInfo       = &bufferInfo;
-                descrWrite.pImageInfo        = nullptr;
-                descrWrite.pTexelBufferView  = nullptr;
+                VkDescriptorImageInfo imageInfo{};
+                imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                imageInfo.imageView = a_imageView;
+                imageInfo.sampler = a_imageSampler;
 
-                vkUpdateDescriptorSets(a_device, 1, &descrWrite, 0, nullptr);
+                std::array<VkWriteDescriptorSet, 2> descrWrite{};
+                descrWrite[0].sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                descrWrite[0].dstSet            = a_dsets[i];
+                descrWrite[0].dstBinding        = 0;
+                descrWrite[0].dstArrayElement   = 0;
+                descrWrite[0].descriptorType    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                descrWrite[0].descriptorCount   = 1;
+                descrWrite[0].pBufferInfo       = &bufferInfo;
+
+                descrWrite[1].sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                descrWrite[1].dstSet            = a_dsets[i];
+                descrWrite[1].dstBinding        = 1;
+                descrWrite[1].dstArrayElement   = 0;
+                descrWrite[1].descriptorType    = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                descrWrite[1].descriptorCount   = 1;
+                descrWrite[1].pImageInfo        = &imageInfo;
+
+                vkUpdateDescriptorSets(a_device, descrWrite.size(), descrWrite.data(), 0, nullptr);
             }
         }
 
-        static void CreateSceneGraphicsPipeline(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
+        static void CreateDSForEachTexture(VkDevice a_device, std::vector<VkBuffer>& a_buffer, size_t a_bufferSize, const VkDescriptorSetLayout *a_pDSLayout,
+                VkDescriptorPool *a_pDSPool, std::vector<VkDescriptorSet>& a_dsets, size_t a_count, std::unordered_map<std::string, Texture>& a_textures)
+        {
+            for (auto& texture : a_textures)
+            {
+                std::string textureName{ texture.first };
+                Texture     textureObj{ texture.second };
+                CreateDescriptorSet(a_device, a_buffer, a_bufferSize, a_pDSLayout, a_pDSPool, a_dsets, a_count,
+                        textureObj.getImageView(), textureObj.getSampler());
+            }
+        }
+
+        static void CreateGraphicsPipeline(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
                 std::unordered_map<std::string, Pipe>& a_pipes, VkDescriptorSetLayout a_dsLayout)
         {
             auto vertShaderCode = vk_utils::ReadFile("shaders/scene.vert.spv");
@@ -521,6 +610,13 @@ class Application
             a_pipes["scene"] = Pipe{ pipeline, pipelineLayout };
         }
 
+        static void CreatePipelines(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
+                std::unordered_map<std::string, Pipe>& a_pipes, std::unordered_map<std::string, Texture>& a_textures,
+                VkDescriptorSetLayout a_dsLayout)
+        {
+            CreateGraphicsPipeline(a_device, a_screenExtent, a_renderPass, a_pipes, a_dsLayout);
+        }
+
         static void CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, vk_utils::ScreenBufferResources* pScreen,
                 VkImageView a_depthImageView)
         {
@@ -576,7 +672,7 @@ class Application
 
         static void RecordCommandBuffer(VkDevice a_device, VkFramebuffer a_swapChainFramebuffer, VkExtent2D a_frameBufferExtent, VkRenderPass a_renderPass,
                 const std::unordered_map<std::string, RenderObject>& a_objects, VkBuffer& a_ubo, VkDeviceMemory& a_uboMem, VkCommandBuffer a_cmdBuffer,
-                VkDescriptorSet a_descrSet) 
+                VkDescriptorSet a_descrSet, size_t a_frameID) 
         {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -586,7 +682,8 @@ class Application
                 throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to begin recording command buffer!");
 
             VkClearValue colorClear;
-            colorClear.color = { {  1.0f, 0.7f, 0.6f, 1.0f } };
+            //colorClear.color = { {  1.0f, 0.7f, 0.6f, 1.0f } };
+            colorClear.color = { {  0.0f, 0.0f, 0.0f, 0.0f } };
 
             VkClearValue depthClear;
             depthClear.depthStencil.depth = 1.f;
@@ -615,6 +712,8 @@ class Application
                 {
                     vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipeline);
                     vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipelineLayout, 0, 1, &a_descrSet, 0, nullptr);
+                    //vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipelineLayout, 0, 1,
+                    //&(obj.pipe->descriptorSets[a_frameID]), 0, nullptr);
                     previousPipe = obj.pipe;
                 }
 
@@ -826,6 +925,125 @@ class Application
             vkFreeCommandBuffers(a_device, a_pool, 1, &cmdBuff);
         }
 
+        static VkImageMemoryBarrier imBarTransfer(VkImage a_image, const VkImageSubresourceRange& a_range, VkImageLayout before, VkImageLayout after)
+        {
+            VkImageMemoryBarrier moveToGeneralBar{};
+            moveToGeneralBar.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            moveToGeneralBar.pNext               = nullptr;
+            moveToGeneralBar.srcAccessMask       = 0;
+            moveToGeneralBar.dstAccessMask       = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            moveToGeneralBar.oldLayout           = before;
+            moveToGeneralBar.newLayout           = after;
+            moveToGeneralBar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            moveToGeneralBar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            moveToGeneralBar.image               = a_image;
+            moveToGeneralBar.subresourceRange    = a_range;
+            return moveToGeneralBar;
+        }
+
+        static VkImageSubresourceRange WholeImageRange()
+        {
+            VkImageSubresourceRange rangeWholeImage{};
+            rangeWholeImage.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            rangeWholeImage.baseMipLevel   = 0;
+            rangeWholeImage.levelCount     = 1;
+            rangeWholeImage.baseArrayLayer = 0;
+            rangeWholeImage.layerCount     = 1;
+            return rangeWholeImage;
+        }
+
+        static void CopyBufferToTexure(VkDevice a_device, VkCommandPool a_pool, VkQueue a_queue, VkBuffer a_cpuBuffer, VkImage a_image, uint32_t a_w, uint32_t a_h)
+        {
+            VkCommandBufferAllocateInfo allocInfo = {};
+            allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.commandPool        = a_pool;
+            allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandBufferCount = 1;
+
+            VkCommandBuffer cmdBuff;
+            if (vkAllocateCommandBuffers(a_device, &allocInfo, &cmdBuff) != VK_SUCCESS)
+                throw std::runtime_error("[CopyBufferToTexure]: failed to allocate command buffer!");
+
+            VkCommandBufferBeginInfo beginInfo{};    
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            VK_CHECK_RESULT(vkBeginCommandBuffer(cmdBuff, &beginInfo));
+
+            VkImageSubresourceRange rangeWholeImage = WholeImageRange();
+
+            VkImageSubresourceLayers shittylayers{};
+            shittylayers.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            shittylayers.mipLevel       = 0;
+            shittylayers.baseArrayLayer = 0;
+            shittylayers.layerCount     = 1;
+
+            VkBufferImageCopy wholeRegion = {};
+            wholeRegion.bufferOffset      = 0;
+            wholeRegion.bufferRowLength   = a_w;
+            wholeRegion.bufferImageHeight = a_h;
+            wholeRegion.imageExtent       = VkExtent3D{a_w, a_h, 1};
+            wholeRegion.imageOffset       = VkOffset3D{0,0,0};
+            wholeRegion.imageSubresource  = shittylayers;
+
+            VkImageMemoryBarrier moveToGeneralBar = imBarTransfer(a_image,
+                    rangeWholeImage,
+                    VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+            vkCmdPipelineBarrier(cmdBuff,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    0,
+                    0, nullptr,            // general memory barriers
+                    0, nullptr,            // buffer barriers
+                    1, &moveToGeneralBar); // image  barriers
+
+            VkClearColorValue clearVal = {};
+            clearVal.float32[0] = 1.0f;
+            clearVal.float32[1] = 0.0f;
+            clearVal.float32[2] = 0.0f;
+            clearVal.float32[3] = 0.0f;
+
+            vkCmdClearColorImage(cmdBuff, a_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearVal, 1, &rangeWholeImage);
+
+            vkCmdCopyBufferToImage(cmdBuff, a_cpuBuffer, a_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &wholeRegion);
+
+
+            VkImageMemoryBarrier imgBar{};
+            {
+                imgBar.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                imgBar.pNext = nullptr;
+                imgBar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                imgBar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+                imgBar.srcAccessMask       = 0;
+                imgBar.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+                imgBar.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                imgBar.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                imgBar.image               = a_image;
+
+                imgBar.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+                imgBar.subresourceRange.baseMipLevel   = 0;
+                imgBar.subresourceRange.levelCount     = 1;
+                imgBar.subresourceRange.baseArrayLayer = 0;
+                imgBar.subresourceRange.layerCount     = 1;
+            };
+
+            vkCmdPipelineBarrier(cmdBuff,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    0,
+                    0, nullptr,
+                    0, nullptr,
+                    1, &imgBar);
+
+            VK_CHECK_RESULT(vkEndCommandBuffer(cmdBuff));
+
+            RunCommandBuffer(cmdBuff, a_queue, a_device);
+
+            vkFreeCommandBuffers(a_device, a_pool, 1, &cmdBuff);
+        }
+
         static void RunCommandBuffer(VkCommandBuffer a_cmdBuff, VkQueue a_queue, VkDevice a_device)
         {
             VkSubmitInfo submitInfo{};
@@ -860,7 +1078,8 @@ class Application
             }
 
             RecordCommandBuffer(m_device, m_screen.swapChainFramebuffers[imageIndex], m_screen.swapChainExtent, m_renderPass, m_renerables,
-                    m_uniformBuffers[imageIndex], m_uniformBuffersMemory[imageIndex], m_commandBuffers[imageIndex], m_sceneDS[imageIndex]);
+                    m_uniformBuffers[imageIndex], m_uniformBuffersMemory[imageIndex], m_commandBuffers[imageIndex], m_sceneDS[imageIndex],
+                    imageIndex);
 
             VkSemaphore      waitSemaphores[]{ m_sync.imageAvailableSemaphores[m_currentFrame] };
             VkPipelineStageFlags waitStages[]{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -967,6 +1186,11 @@ class Application
                 mesh.second.cleanup();
             }
 
+            for (auto tex : m_textures)
+            {
+                tex.second.cleanup();
+            }
+
             for (auto pipe : m_pipes)
             {
                 vkDestroyPipeline      (m_device, pipe.second.pipeline, nullptr);
@@ -1039,10 +1263,10 @@ class Application
 
 int main() 
 {
+    Application app{};
+
     try 
     {
-        Application app{};
-
         app.run();
     }
     catch (const std::exception& e) 
