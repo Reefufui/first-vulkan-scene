@@ -5,25 +5,39 @@ layout (location = 1) in vec3 vColor;
 layout (location = 2) in vec3 vNormal;
 layout (location = 3) in vec2 vUVCoord;
 
-layout (location = 0) out vec3 fColor;
-layout (location = 1) out vec2 fTexCoord;
-
-layout(binding = 0) uniform UniformBufferObject
+layout (location = 0) out VOUT
 {
-    mat4 mvp;
-} ubo;
+    vec3 color;
+    vec3 normal;
+    vec3 eyePos;
+    vec3 lightVector;
+    vec3 worldPos;
+    vec3 lightPos;
+    vec2 uv;
+} vOut;
+
+out gl_PerVertex
+{
+    vec4 gl_Position;
+};
 
 layout( push_constant ) uniform constants
 {
-    vec4 data;
-    mat4 mvp;
+    mat4 model;
+    mat4 vp; // projection * view
+    vec3 lightPos;
 } PushConstants;
 
 void main() 
-{	
-    fColor = vNormal;
-    fTexCoord = vUVCoord;
+{
+    vOut.color       = vNormal;
+    vOut.normal      = vNormal;
+    vOut.uv          = vUVCoord;
+    vOut.lightPos    = PushConstants.lightPos;
+    vOut.eyePos      = vec3(PushConstants.model * vec4(vPosition, 1.0f));
+    vOut.lightVector = normalize(PushConstants.lightPos - vPosition);
+    vOut.worldPos    = vPosition;
 
-    gl_Position = PushConstants.mvp * vec4(vPosition, 1.0f);
+    gl_Position = PushConstants.vp * PushConstants.model * vec4(vPosition, 1.0f);
 }
 

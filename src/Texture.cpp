@@ -135,14 +135,14 @@ VkImageSubresourceRange Texture::wholeImageRange()
     return rangeWholeImage;
 }
 
-VkImageSubresourceRange CubeTexture::wholeImageRange()
+VkImageSubresourceRange CubeTexture::wholeImageRange(uint32_t a_from, uint32_t a_count)
 {
     VkImageSubresourceRange rangeWholeImage{};
     rangeWholeImage.aspectMask     = m_aspect;
     rangeWholeImage.baseMipLevel   = 0;
     rangeWholeImage.levelCount     = 1;
-    rangeWholeImage.baseArrayLayer = 0;
-    rangeWholeImage.layerCount     = 6;
+    rangeWholeImage.baseArrayLayer = a_from;
+    rangeWholeImage.layerCount     = a_count;
     return rangeWholeImage;
 }
 

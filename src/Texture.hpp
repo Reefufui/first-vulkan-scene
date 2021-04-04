@@ -47,7 +47,7 @@ class Texture
 class CubeTexture : public Texture
 {
     public:
-        VkImageSubresourceRange wholeImageRange();
+        VkImageSubresourceRange wholeImageRange(uint32_t a_from, uint32_t a_count);
         void loadFromJPG(const char* a_filename);
         void create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a_usage, VkFormat a_format);
 };

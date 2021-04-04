@@ -26,8 +26,8 @@
 #include "Texture.hpp"
 #include "Timer.hpp"
 
-const int WIDTH     = 800;
-const int HEIGHT    = 600;
+const int WIDTH     = 1600;
+const int HEIGHT    = 900;
 const int CUBE_SIDE = 1000;
 
 const int MAX_FRAMES_IN_FLIGHT = 3;
@@ -42,12 +42,13 @@ const bool enableValidationLayers = false;
 const bool enableValidationLayers = true;
 #endif
 
-static Timer timer{};
+const static Timer timer{};
 
 class Application 
 {
     private:
-        GLFWwindow * m_window;
+
+        GLFWwindow* m_window;
 
         VkInstance m_instance;
         std::vector<const char*> m_enabledLayers;
@@ -56,25 +57,29 @@ class Application
         VkSurfaceKHR m_surface;
 
         VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-        VkDevice m_device;
+        VkDevice         m_device;
 
         VkQueue m_graphicsQueue;
         VkQueue m_presentQueue;
 
         vk_utils::ScreenBufferResources m_screen;
 
-        VkRenderPass     m_finalRenderPass;
-        VkRenderPass     m_shadowCubemapPass;
+        struct RenderPasses {
+            VkRenderPass     finalRenderPass;
+            VkRenderPass     shadowCubemapPass;
+        } m_renderPasses;
 
         VkCommandPool                m_commandPool;
         std::vector<VkCommandBuffer> m_drawCommandBuffers;
+        size_t                       m_currentFrame{}; // for draw command buffer indexing
 
-        VkFramebuffer m_shadowCubemapFrameBuffer;
+        struct FramebuffersOffscreen {
+            VkFramebuffer shadowCubemapFrameBuffer;
+        } m_framebuffersOffscreen;
 
         struct Attachments {
             // final pass
             Texture     presentDepth;
-            CubeTexture shadowCubemap;
             // offscreen (shadow map)
             Texture     offscreenDepth;
             Texture     offscreenColor;
@@ -87,18 +92,29 @@ class Application
             std::vector<VkFence>     inFlightFences;
         } m_sync;
 
-        size_t m_currentFrame{};
-
         struct Pipe {
             VkPipeline                    pipeline;
             VkPipelineLayout              pipelineLayout;
         };
 
         struct InputTexture {
-            Texture*                      texture;
-            VkDescriptorPool              descriptorPool;
-            std::vector<VkDescriptorSet>  descriptorSets;
+            Texture*         texture;
+            VkDescriptorSet  descriptorSet;
         };
+
+        CubeTexture m_shadowCubemapTexture;
+        struct InputCubeTexture {
+            CubeTexture*    shadowCubemap;
+            VkDescriptorSet descriptorSet;
+        } m_shadowCubemap;
+
+        struct DSLayouts {
+            VkDescriptorSetLayout textureOnlyLayout; // suits cubemap texture as well
+        } m_DSLayouts;
+
+        struct DSPools {
+            VkDescriptorPool textureDSPool; // suits cubemap texture as well
+        } m_DSPools;
 
         struct RenderObject {
             Mesh*          mesh;
@@ -107,20 +123,11 @@ class Application
             glm::mat4      matrix;
         };
 
-        std::unordered_map<std::string, RenderObject> m_renerables;
-        std::unordered_map<std::string, Pipe>         m_pipes;
         std::unordered_map<std::string, Mesh>         m_meshes;
         std::unordered_map<std::string, Texture>      m_textures;
+        std::unordered_map<std::string, Pipe>         m_pipes;
         std::unordered_map<std::string, InputTexture> m_inputTextures;
-
-        struct UBO {
-            glm::mat4 mvp;
-        };
-
-        VkDescriptorSetLayout m_sceneDSLayout;
-
-        std::vector<VkBuffer>        m_uniformBuffers;
-        std::vector<VkDeviceMemory>  m_uniformBuffersMemory;
+        std::unordered_map<std::string, RenderObject> m_renerables;
 
         static VKAPI_ATTR VkBool32 VKAPI_CALL debugReportCallbackFn(
                 VkDebugReportFlagsEXT                       flags,
@@ -178,8 +185,12 @@ class Application
 
             };
 
-            loadMesh("terrain");
+            //loadMesh("terrain");
             loadMesh("fireleviathan");
+            loadMesh("freddy-body");
+            loadMesh("freddy-endo");
+            loadMesh("freddy-eyes");
+            loadMesh("freddy-mic");
         }
 
         static void LoadTextures(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
@@ -244,8 +255,13 @@ class Application
                 a_textures[textureName] = texture;
             };
 
-            loadTexture("terrain");
+            //loadTexture("terrain");
             loadTexture("fireleviathan");
+            loadTexture("body_d");
+            loadTexture("endo_d");
+            loadTexture("eye_d");
+            loadTexture("mic_d");
+            loadTexture("rock");
         }
 
 
@@ -295,7 +311,11 @@ class Application
                 m = glm::translate(m, glm::vec3(0.0f, 15.0f, 7.0f));
                 m = glm::rotate(m, glm::radians(180.0f), glm::vec3(0, 1, 0));
             }
-            createRenderable("terrain", "terrain", "scene", "terrain");
+            //createRenderable("terrain", "terrain", "scene", "terrain");
+            createRenderable("freddy-body", "freddy-body", "scene", "body_d");
+            createRenderable("freddy-endo", "freddy-endo", "scene", "endo_d");
+            createRenderable("freddy-eyes", "freddy-eyes", "scene", "eye_d");
+            createRenderable("freddy-mic", "freddy-mic", "scene", "mic_d");
         }
 
         static void UpdateScene(std::unordered_map<std::string, RenderObject>& a_renerables)
@@ -308,46 +328,59 @@ class Application
                 m = glm::rotate(m, glm::radians(180.0f), glm::vec3(0, 1, 0));
 
                 a_renerables["fireleviathan"].matrix = m;
+                //a_renerables["fireleviathan"].matrix = glm::mat4(0.0f);
+            }
+
+            {
+                glm::mat4 m{1.0f};
+
+                m = glm::scale(m, glm::vec3(0.08));
+                m = glm::translate(m, glm::vec3(0.0f, -80.0f, 0.0f));
+                m = glm::rotate(m, glm::radians(180.0f), glm::vec3(0, 1, 0));
+                //m = glm::rotate(m, glm::radians(180.0f * (float)sin(timer.elapsed())), glm::vec3(0, 1, 0));
+
+                a_renerables["freddy-body"].matrix = m;
+                a_renerables["freddy-endo"].matrix = m;
+                a_renerables["freddy-mic"].matrix = m;
+                m = glm::rotate(m, glm::radians(7.0f * (float)cos(timer.elapsed())), glm::vec3(0, 1, 0));
+                a_renerables["freddy-eyes"].matrix = m;
             }
         }
 
         void CreateResources()
         {
-            std::cout << "\tcreating render passes...\n";
-            CreateFinalRenderpass(m_device, m_screen.swapChainImageFormat, &m_finalRenderPass);
-            CreateShadowCubemapRenderPass(m_device, &m_shadowCubemapPass);
-
-            std::cout << "\tcreating attachments...\n";
-            CreateAttachments(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_attachments);
-
-            std::cout << "\tcreating frame buffers...\n";
-            CreateScreenFrameBuffers(m_device, m_finalRenderPass, &m_screen, m_attachments);
-            CreateShadowCubemapFrameBuffer(m_device, m_shadowCubemapPass, m_shadowCubemapFrameBuffer, m_attachments);
-
             std::cout << "\tcreating sync objects...\n";
             CreateSyncObjects(m_device, &m_sync);
 
-            std::cout << "\tcreating uniform buffers...\n";
-            CreateUniformBuffers(m_device, physicalDevice, sizeof(UBO), m_uniformBuffers, m_uniformBuffersMemory, m_screen.swapChainImageViews.size());
-
-            std::cout << "\tloading textures...\n";
+            std::cout << "\tloading assets...\n";
             LoadTextures(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_textures);
+            LoadMeshes(  m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_meshes);
+
+            std::cout << "\tcreating attachments...\n";
+            CreateAttachments(     m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_attachments);
+            CreateShadowmapTexture(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_shadowCubemapTexture);
 
             std::cout << "\tcreating descriptor sets...\n";
-            CreateSceneDescriptorSetLayout(m_device, &m_sceneDSLayout);
-            CreateDSForEachTexture(m_device, m_uniformBuffers, sizeof(UBO), &m_sceneDSLayout, m_inputTextures, m_textures,
-                    m_screen.swapChainImageViews.size());
+            CreateTextureOnlyLayout(m_device, &m_DSLayouts.textureOnlyLayout);
+            CreateTextureDescriptorPool(m_device, m_DSPools.textureDSPool, m_textures.size() + 1); // + 1 for cubemap
+            CreateDSForEachTexture(m_device, &m_DSLayouts.textureOnlyLayout, m_DSPools.textureDSPool, m_inputTextures, m_textures,
+                    m_shadowCubemap, m_shadowCubemapTexture); // even shadow cubemap texture
 
-            std::cout << "\tcreating graphics pipeline...\n";
-            CreatePipelines(m_device, m_screen.swapChainExtent, m_finalRenderPass, m_pipes, m_sceneDSLayout);
+            std::cout << "\tcreating render passes...\n";
+            CreateFinalRenderpass(        m_device, &(m_renderPasses.finalRenderPass), m_screen.swapChainImageFormat);
+            CreateShadowCubemapRenderPass(m_device, &(m_renderPasses.shadowCubemapPass));
 
-            std::cout << "\tloading meshes...\n";
-            LoadMeshes(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_meshes);
+            std::cout << "\tcreating frame buffers...\n";
+            CreateScreenFrameBuffers(      m_device, m_renderPasses.finalRenderPass,   &m_screen,                                        m_attachments);
+            CreateShadowCubemapFrameBuffer(m_device, m_renderPasses.shadowCubemapPass, m_framebuffersOffscreen.shadowCubemapFrameBuffer, m_attachments);
+
+            std::cout << "\tcreating graphics pipelines...\n";
+            CreateGraphicsPipelines(m_device, m_screen.swapChainExtent, m_renderPasses, m_pipes, m_DSLayouts);
 
             std::cout << "\tcomposing scene...\n";
             ComposeScene(m_renerables, m_pipes, m_meshes, m_inputTextures);
 
-            std::cout << "\tcreating command buffers...\n";
+            std::cout << "\tcreating drawing command buffers...\n";
             CreateDrawCommandBuffers(m_device, m_commandPool, m_screen.swapChainFramebuffers, &m_drawCommandBuffers);
         }
 
@@ -364,7 +397,7 @@ class Application
             vkDeviceWaitIdle(m_device);
         }
 
-        static void CreateFinalRenderpass(VkDevice a_device, VkFormat a_swapChainImageFormat, VkRenderPass* a_pRenderPass)
+        static void CreateFinalRenderpass(VkDevice a_device, VkRenderPass* a_pRenderPass, VkFormat a_swapChainImageFormat)
         {
             VkAttachmentDescription colorAttachment{};
             colorAttachment.format         = a_swapChainImageFormat;
@@ -486,24 +519,16 @@ class Application
                 throw std::runtime_error("[CreateShadowCubemapRenderPass]: failed to create render pass!");
         }
 
-
-        static void CreateSceneDescriptorSetLayout(VkDevice a_device, VkDescriptorSetLayout *a_pDSLayout)
+        static void CreateTextureOnlyLayout(VkDevice a_device, VkDescriptorSetLayout *a_pDSLayout)
         {
-            VkDescriptorSetLayoutBinding uboLayoutBinding{};
-            uboLayoutBinding.binding            = 0;
-            uboLayoutBinding.descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            uboLayoutBinding.descriptorCount    = 1;
-            uboLayoutBinding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
-            uboLayoutBinding.pImmutableSamplers = nullptr;
-
             VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-            samplerLayoutBinding.binding            = 1;
+            samplerLayoutBinding.binding            = 0;
             samplerLayoutBinding.descriptorType     = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             samplerLayoutBinding.descriptorCount    = 1;
             samplerLayoutBinding.stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
             samplerLayoutBinding.pImmutableSamplers = nullptr;
 
-            std::array<VkDescriptorSetLayoutBinding, 2> binds = {uboLayoutBinding, samplerLayoutBinding};
+            std::array<VkDescriptorSetLayoutBinding, 1> binds = {samplerLayoutBinding};
 
             VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo{};
             descriptorSetLayoutCreateInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -511,116 +536,73 @@ class Application
             descriptorSetLayoutCreateInfo.pBindings    = binds.data();
 
             if (vkCreateDescriptorSetLayout(a_device, &descriptorSetLayoutCreateInfo, nullptr, a_pDSLayout) != VK_SUCCESS)
-                throw std::runtime_error("[CreateSceneDescriptorSetLayout]: failed to create DS layout!");
+                throw std::runtime_error("[CreateTextureOnlyLayout]: failed to create DS layout!");
         }
 
-        static void CreateDescriptorSet(VkDevice a_device, std::vector<VkBuffer>& a_buffer, size_t a_bufferSize, const VkDescriptorSetLayout *a_pDSLayout,
-                VkDescriptorPool *a_pDSPool, std::vector<VkDescriptorSet>& a_dsets, size_t a_count, VkImageView a_imageView, VkSampler a_imageSampler)
+        static void CreateOneImageDescriptorSet(VkDevice a_device, const VkDescriptorSetLayout *a_pDSLayout, VkDescriptorPool& a_DSPool,
+                VkDescriptorSet& a_dset, VkImageView a_imageView, VkSampler a_imageSampler)
         {
-            std::array<VkDescriptorPoolSize, 2> descriptorPoolSizes{};
-            descriptorPoolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            descriptorPoolSizes[0].descriptorCount = a_count;
-            descriptorPoolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            descriptorPoolSizes[1].descriptorCount = a_count;
+            VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{};
+            descriptorSetAllocateInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            descriptorSetAllocateInfo.descriptorPool     = a_DSPool;
+            descriptorSetAllocateInfo.descriptorSetCount = 1;
+            descriptorSetAllocateInfo.pSetLayouts        = a_pDSLayout;
+
+            if (vkAllocateDescriptorSets(a_device, &descriptorSetAllocateInfo, &a_dset) != VK_SUCCESS)
+                throw std::runtime_error("[CreateOneImageDescriptorSet]: failed to allocate descriptor set pool!");
+
+            VkWriteDescriptorSet descrWrite{};
+            descrWrite.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descrWrite.dstSet            = a_dset;
+            descrWrite.dstBinding        = 0;
+            descrWrite.dstArrayElement   = 0;
+            descrWrite.descriptorType    = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descrWrite.descriptorCount   = 1;
+
+            VkDescriptorImageInfo        imageInfo{ a_imageSampler, a_imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            descrWrite.pImageInfo        = &imageInfo;
+
+            vkUpdateDescriptorSets(a_device, 1, &descrWrite, 0, nullptr);
+        }
+
+        // this suits cubemap texture as well
+        static void CreateTextureDescriptorPool(VkDevice a_device, VkDescriptorPool& a_dsPool, uint32_t a_count)
+        {
+            VkDescriptorPoolSize poolSize{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, a_count };
 
             VkDescriptorPoolCreateInfo descriptorPoolCreateInfo{};
             descriptorPoolCreateInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
             descriptorPoolCreateInfo.maxSets       = a_count;
-            descriptorPoolCreateInfo.poolSizeCount = descriptorPoolSizes.size();
-            descriptorPoolCreateInfo.pPoolSizes    = descriptorPoolSizes.data();
+            descriptorPoolCreateInfo.poolSizeCount = 1;
+            descriptorPoolCreateInfo.pPoolSizes    = &poolSize;
 
-            if (vkCreateDescriptorPool(a_device, &descriptorPoolCreateInfo, NULL, a_pDSPool) != VK_SUCCESS)
-                throw std::runtime_error("[CreateDescriptorSet]: failed to create descriptor set pool!");
-
-            std::vector<VkDescriptorSetLayout> layouts(a_count, *a_pDSLayout);
-
-            VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{};
-            descriptorSetAllocateInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            descriptorSetAllocateInfo.descriptorPool     = *a_pDSPool;
-            descriptorSetAllocateInfo.descriptorSetCount = a_count;
-            descriptorSetAllocateInfo.pSetLayouts        = layouts.data();
-
-            a_dsets.resize(a_count);
-            if (vkAllocateDescriptorSets(a_device, &descriptorSetAllocateInfo, a_dsets.data()) != VK_SUCCESS)
-                throw std::runtime_error("[CreateDescriptorSet]: failed to allocate descriptor set pool!");
-
-            for (size_t i{}; i < a_count; ++i)
-            {
-                VkDescriptorBufferInfo bufferInfo{};
-                bufferInfo.buffer = a_buffer[i];
-                bufferInfo.range = a_bufferSize;
-
-                VkDescriptorImageInfo imageInfo{};
-                imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                imageInfo.imageView = a_imageView;
-                imageInfo.sampler = a_imageSampler;
-
-                std::array<VkWriteDescriptorSet, 2> descrWrite{};
-                descrWrite[0].sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                descrWrite[0].dstSet            = a_dsets[i];
-                descrWrite[0].dstBinding        = 0;
-                descrWrite[0].dstArrayElement   = 0;
-                descrWrite[0].descriptorType    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                descrWrite[0].descriptorCount   = 1;
-                descrWrite[0].pBufferInfo       = &bufferInfo;
-
-                descrWrite[1].sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                descrWrite[1].dstSet            = a_dsets[i];
-                descrWrite[1].dstBinding        = 1;
-                descrWrite[1].dstArrayElement   = 0;
-                descrWrite[1].descriptorType    = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                descrWrite[1].descriptorCount   = 1;
-                descrWrite[1].pImageInfo        = &imageInfo;
-
-                vkUpdateDescriptorSets(a_device, descrWrite.size(), descrWrite.data(), 0, nullptr);
-            }
+            if (vkCreateDescriptorPool(a_device, &descriptorPoolCreateInfo, nullptr, &a_dsPool) != VK_SUCCESS)
+                throw std::runtime_error("[CreateDSForEachTexture]: failed to create descriptor set pool!");
         }
 
-        static void CreateDSForEachTexture(VkDevice a_device, std::vector<VkBuffer>& a_buffer, size_t a_bufferSize, VkDescriptorSetLayout* a_pDSLayout,
-                std::unordered_map<std::string, InputTexture>& a_inputTextures, std::unordered_map<std::string, Texture>& a_textures, size_t a_count)
+        static void CreateDSForEachTexture(VkDevice a_device, VkDescriptorSetLayout* a_pDSLayout, VkDescriptorPool& a_dsPool,
+                std::unordered_map<std::string, InputTexture>& a_inputTextures, std::unordered_map<std::string, Texture>& a_textures,
+                InputCubeTexture& a_inputCubeTexture, CubeTexture& a_cubeTexture)
         {
             for (auto& texture : a_textures)
             {
-                Texture*    pTextureObj{ &texture.second };
+                Texture* pTextureObj{ &texture.second };
+                InputTexture inputTexture{ pTextureObj, VK_NULL_HANDLE };
 
-                VkDescriptorPool              pPool{ nullptr };
-                std::vector<VkDescriptorSet>  dSets{};
+                CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, inputTexture.descriptorSet, pTextureObj->getImageView(), pTextureObj->getSampler());
 
-                CreateDescriptorSet(a_device, a_buffer, a_bufferSize, a_pDSLayout, &pPool, dSets, a_count,
-                        pTextureObj->getImageView(), pTextureObj->getSampler());
-
-                a_inputTextures[texture.first] = { pTextureObj, pPool, dSets };
-
+                a_inputTextures[texture.first] = inputTexture;
             }
+
+            a_inputCubeTexture.shadowCubemap = &a_cubeTexture;
+            CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, a_inputCubeTexture.descriptorSet, a_cubeTexture.getImageView(), a_cubeTexture.getSampler());
         }
 
-        static void CreateGraphicsPipeline(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
-                std::unordered_map<std::string, Pipe>& a_pipes, VkDescriptorSetLayout a_dsLayout)
+        static void CreateGraphicsPipelines(VkDevice a_device, VkExtent2D a_screenExtent, RenderPasses a_renderPasses,
+                std::unordered_map<std::string, Pipe>& a_pipes, DSLayouts a_dsLayouts)
         {
-            auto vertShaderCode = vk_utils::ReadFile("shaders/scene.vert.spv");
-            auto fragShaderCode = vk_utils::ReadFile("shaders/scene.frag.spv");
-
-            VkShaderModule vertShaderModule = vk_utils::CreateShaderModule(a_device, vertShaderCode);
-            VkShaderModule fragShaderModule = vk_utils::CreateShaderModule(a_device, fragShaderCode);
-
-            VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
-            vertShaderStageInfo.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            vertShaderStageInfo.stage  = VK_SHADER_STAGE_VERTEX_BIT;
-            vertShaderStageInfo.module = vertShaderModule;
-            vertShaderStageInfo.pName  = "main";
-
-            VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
-            fragShaderStageInfo.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            fragShaderStageInfo.stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-            fragShaderStageInfo.module = fragShaderModule;
-            fragShaderStageInfo.pName  = "main";
-
-            std::vector<VkPipelineShaderStageCreateInfo> shaderStages {
-                vertShaderStageInfo, fragShaderStageInfo
-            };
-
+            // same vertex input for each pipeline
             VertexInputDescription vertexDescr{ Vertex::getVertexDescription() };
-
             VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
             vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
             vertexInputInfo.vertexBindingDescriptionCount   = vertexDescr.bindings.size();
@@ -628,6 +610,7 @@ class Application
             vertexInputInfo.pVertexBindingDescriptions      = vertexDescr.bindings.data();
             vertexInputInfo.pVertexAttributeDescriptions    = vertexDescr.attributes.data();
 
+            // initializing default pipeline structures
             VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
             inputAssembly.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
             inputAssembly.topology               = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -689,24 +672,25 @@ class Application
             colorBlending.blendConstants[3] = 0.0f;
 
             std::vector<VkPushConstantRange> pushConstants{
-                { VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants) }
+                { VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants) }
             };
 
             VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
             pipelineLayoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            pipelineLayoutInfo.setLayoutCount         = 1;
-            pipelineLayoutInfo.pSetLayouts            = &a_dsLayout;
             pipelineLayoutInfo.pushConstantRangeCount = pushConstants.size();
             pipelineLayoutInfo.pPushConstantRanges    = pushConstants.data();
 
-            VkPipelineLayout pipelineLayout{};
-            if (vkCreatePipelineLayout(a_device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
-                throw std::runtime_error("[CreateGraphicsPipeline]: failed to create pipeline layout!");
+            std::vector<VkDynamicState> dynamicStates {
+                VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_VIEWPORT
+            };
+
+            VkPipelineDynamicStateCreateInfo dynamicStatesInfo{};
+            dynamicStatesInfo.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dynamicStatesInfo.dynamicStateCount = dynamicStates.size();
+            dynamicStatesInfo.pDynamicStates    = dynamicStates.data();
 
             VkGraphicsPipelineCreateInfo pipelineInfo{};
             pipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-            pipelineInfo.stageCount          = shaderStages.size();
-            pipelineInfo.pStages             = shaderStages.data();
             pipelineInfo.pVertexInputState   = &vertexInputInfo;
             pipelineInfo.pInputAssemblyState = &inputAssembly;
             pipelineInfo.pViewportState      = &viewportState;
@@ -714,25 +698,68 @@ class Application
             pipelineInfo.pMultisampleState   = &multisampling;
             pipelineInfo.pDepthStencilState  = &depthAndStencil;
             pipelineInfo.pColorBlendState    = &colorBlending;
-            pipelineInfo.layout              = pipelineLayout;
-            pipelineInfo.renderPass          = a_renderPass;
+            pipelineInfo.pDynamicState       = &dynamicStatesInfo;
             pipelineInfo.subpass             = 0;
             pipelineInfo.basePipelineHandle  = VK_NULL_HANDLE;
 
-            VkPipeline pipeline{};
-            if (vkCreateGraphicsPipelines(a_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS)
-                throw std::runtime_error("[CreateGraphicsPipeline]: failed to create graphics pipeline!");
+            VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
+            vertShaderStageInfo.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            vertShaderStageInfo.stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            vertShaderStageInfo.pName  = "main";
 
-            vkDestroyShaderModule(a_device, fragShaderModule, nullptr);
-            vkDestroyShaderModule(a_device, vertShaderModule, nullptr);
+            VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
+            fragShaderStageInfo.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            fragShaderStageInfo.stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            fragShaderStageInfo.pName  = "main";
 
-            a_pipes["scene"] = Pipe{ pipeline, pipelineLayout };
-        }
+            auto createPipeline = [&](std::string&& a_pipeName, std::vector<VkDescriptorSetLayout>& a_dsLayouts, std::string&& a_shaderName, VkRenderPass a_renderPass)
+            {
+                pipelineLayoutInfo.setLayoutCount = a_dsLayouts.size();
+                if (pipelineLayoutInfo.setLayoutCount)
+                {
+                    pipelineLayoutInfo.pSetLayouts = a_dsLayouts.data();
+                }
 
-        static void CreatePipelines(VkDevice a_device, VkExtent2D a_screenExtent, VkRenderPass a_renderPass,
-                std::unordered_map<std::string, Pipe>& a_pipes, VkDescriptorSetLayout a_dsLayout)
-        {
-            CreateGraphicsPipeline(a_device, a_screenExtent, a_renderPass, a_pipes, a_dsLayout);
+                VkPipelineLayout pipelineLayout{};
+                if (vkCreatePipelineLayout(a_device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
+                    throw std::runtime_error("[CreateGraphicsPipeline]: failed to create pipeline layout!");
+
+                std::string fileName{};
+
+                fileName = "shaders/.vert.spv";
+                fileName.insert(fileName.find("."), a_shaderName);
+                auto vertShaderCode = vk_utils::ReadFile(fileName.c_str());
+
+                fileName = "shaders/.frag.spv";
+                fileName.insert(fileName.find("."), a_shaderName);
+                auto fragShaderCode = vk_utils::ReadFile(fileName.c_str());
+
+                vertShaderStageInfo.module = vk_utils::CreateShaderModule(a_device, vertShaderCode);
+                fragShaderStageInfo.module = vk_utils::CreateShaderModule(a_device, fragShaderCode);
+
+                std::vector<VkPipelineShaderStageCreateInfo> shaderStages {
+                    vertShaderStageInfo, fragShaderStageInfo
+                };
+
+                pipelineInfo.stageCount          = shaderStages.size();
+                pipelineInfo.pStages             = shaderStages.data();
+                pipelineInfo.layout              = pipelineLayout;
+                pipelineInfo.renderPass          = a_renderPass;
+
+                VkPipeline pipeline{};
+                if (vkCreateGraphicsPipelines(a_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS)
+                    throw std::runtime_error("[CreateGraphicsPipeline]: failed to create graphics pipeline!");
+                a_pipes[a_pipeName] = Pipe{ pipeline, pipelineLayout };
+
+                vkDestroyShaderModule(a_device, fragShaderStageInfo.module, nullptr);
+                vkDestroyShaderModule(a_device, vertShaderStageInfo.module, nullptr);
+            };
+
+            std::vector<VkDescriptorSetLayout> sceneDSLayouts{ a_dsLayouts.textureOnlyLayout, a_dsLayouts.textureOnlyLayout };
+            createPipeline("scene", sceneDSLayouts, "scene", a_renderPasses.finalRenderPass);
+
+            std::vector<VkDescriptorSetLayout> shadowCubemapDSLayout(0);
+            createPipeline("shadow cubemap", shadowCubemapDSLayout, "shadowmap", a_renderPasses.shadowCubemapPass);
         }
 
         static void CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, vk_utils::ScreenBufferResources* pScreen,
@@ -787,80 +814,61 @@ class Application
 
             glm::mat4 view = glm::lookAt(
                     cameraPos,                      //eye (cam position)
-                    glm::vec3(2.5f, 0.0f, 0.0f),    //center (where we are looking)
+                    //glm::vec3(9.5f + sin(timer.elapsed()) * 7.0f, 0.0f, 0.0f),    //center (where we are looking)
+                    glm::vec3(0.0f, 0.0f, 0.0f),    //center (where we are looking)
                     glm::vec3(0.f, 1.f, 0.f)        //up (worlds upwards direction)
                     );
 
-            glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)WIDTH / (float)HEIGHT, 0.1f, 50.0f);
+            glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)WIDTH / (float)HEIGHT, 0.1f, 70.0f);
             projection[1][1] *= -1; // vulkan coordinate space workaround
 
             return projection * view;
         }
 
-        static void UpdateUniformBuffer(VkDevice a_device, VkBuffer& a_ubo, VkDeviceMemory& a_uboMem, glm::mat4 a_modelMatrix)
+        static glm::vec3 light()
         {
-            UBO ubo{};
-            ubo.mvp = camera() * a_modelMatrix;
+            glm::vec3 cameraPos{ glm::vec3(0.0f, 100 + sin(timer.elapsed() / 2.0f) * 180.0f, 0.0f) };
 
-            void* mappedMemory{nullptr};
-            vkMapMemory(a_device, a_uboMem, 0, sizeof(UBO), 0, &mappedMemory);
-            memcpy(mappedMemory, &ubo, sizeof(UBO));
-            vkUnmapMemory(a_device, a_uboMem);
+            return cameraPos;
         }
 
-        static void RecordCommandBuffer(VkDevice a_device, VkFramebuffer a_swapChainFramebuffer, VkExtent2D a_frameBufferExtent, VkRenderPass a_renderPass,
-                const std::unordered_map<std::string, RenderObject>& a_objects, VkBuffer& a_ubo, VkDeviceMemory& a_uboMem, VkCommandBuffer a_cmdBuffer,
-                size_t a_frameID) 
+        static void RecordCommandsOfDrawingRenderables(std::unordered_map<std::string, RenderObject> a_objects, VkCommandBuffer a_cmdBuffer,
+                const Pipe* a_specialPipeline, glm::mat4 a_vpMatrix)
         {
-            VkCommandBufferBeginInfo beginInfo{};
-            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-            if (vkBeginCommandBuffer(a_cmdBuffer, &beginInfo) != VK_SUCCESS) 
-                throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to begin recording command buffer!");
-
-            VkClearValue colorClear;
-            //colorClear.color = { {  1.0f, 0.7f, 0.6f, 1.0f } };
-            colorClear.color = { {  1.0f, 0.55f, 0.15f, 1.0f } };
-
-            VkClearValue depthClear;
-            depthClear.depthStencil.depth = 1.f;
-
-            std::vector<VkClearValue> clearValues{ colorClear, depthClear };
-
-            VkRenderPassBeginInfo renderPassInfo{};
-            renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            renderPassInfo.renderPass        = a_renderPass;
-            renderPassInfo.framebuffer       = a_swapChainFramebuffer;
-            renderPassInfo.renderArea.offset = { 0, 0 };
-            renderPassInfo.renderArea.extent = a_frameBufferExtent;
-            renderPassInfo.clearValueCount  = clearValues.size();
-            renderPassInfo.pClearValues     = clearValues.data();
-
-            vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
+            bool  specialPipeline{ a_specialPipeline != nullptr };
             Mesh* previousMesh{nullptr};
             Pipe* previousPipe{nullptr};
+
+            if (specialPipeline)
+            {
+                vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_specialPipeline->pipeline);
+            }
 
             for (auto& object : a_objects)
             {
                 auto& obj{ object.second };
 
-                if (obj.pipe != previousPipe)
+                const VkPipeline&       pipeline = (!specialPipeline) ? obj.pipe->pipeline       : a_specialPipeline->pipeline;
+                const VkPipelineLayout& pLayout  = (!specialPipeline) ? obj.pipe->pipelineLayout : a_specialPipeline->pipelineLayout;
+
+                if (!specialPipeline && obj.pipe != previousPipe)
                 {
-                    vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipeline);
+                    vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
                     previousPipe = obj.pipe;
                 }
 
-                UpdateUniformBuffer(a_device, a_ubo, a_uboMem, obj.matrix);
+                if (!specialPipeline)
+                {
+                    vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pLayout, 0, 1,
+                            &(obj.texture->descriptorSet), 0, nullptr);
+                }
 
-                vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj.pipe->pipelineLayout, 0, 1,
-                        &(obj.texture->descriptorSets[a_frameID]), 0, nullptr);
+                PushConstants constants{};
+                constants.model    = obj.matrix;
+                constants.vp       = a_vpMatrix;
+                constants.lightPos = light();
 
-                MeshPushConstants constants{};
-                constants.mvp = camera() * obj.matrix;
-
-                vkCmdPushConstants(a_cmdBuffer, obj.pipe->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
+                vkCmdPushConstants(a_cmdBuffer, pLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &constants);
 
                 if (obj.mesh != previousMesh)
                 {
@@ -874,6 +882,136 @@ class Application
 
                 vkCmdDrawIndexed(a_cmdBuffer, obj.mesh->indices.size(), 1, 0, 0, 0);
             }
+        }
+
+        static void RecordCommandsToRenderForCubemapFace(VkFramebuffer a_frameBuffer, VkRenderPass a_renderPass, Pipe a_pipe,
+                const uint32_t a_face, VkCommandBuffer a_cmdBuff, const std::unordered_map<std::string, RenderObject>& a_objects)
+        {
+            std::vector<VkClearValue> clearValues(2);
+            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[1].depthStencil = { 1.0f, 0 };
+
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass        = a_renderPass;
+            renderPassInfo.framebuffer       = a_frameBuffer;
+            renderPassInfo.renderArea.offset = { 0, 0 };
+            renderPassInfo.renderArea.extent = { (uint32_t)CUBE_SIDE, (uint32_t)CUBE_SIDE };
+            renderPassInfo.clearValueCount   = clearValues.size();
+            renderPassInfo.pClearValues      = clearValues.data();
+
+            glm::mat4 viewMatrix = glm::mat4(1.0f);
+            switch (a_face)
+            {
+                case 0: // POSITIVE_X
+                    viewMatrix = glm::rotate(viewMatrix, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f)); 
+                    viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+                    break;
+                case 1: // NEGATIVE_X
+                    viewMatrix = glm::rotate(viewMatrix, glm::radians(-90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                    viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+                    break;
+                case 2: // POSITIVE_Y
+                    viewMatrix = glm::rotate(viewMatrix, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+                    break;
+                case 3: // NEGATIVE_Y
+                    viewMatrix = glm::rotate(viewMatrix, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+                    break;
+                case 4: // POSITIVE_Z
+                    viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+                    break;
+                case 5: // NEGATIVE_Z
+                    viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+                    break;
+            }
+
+            vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, viewMatrix); 
+
+            vkCmdEndRenderPass(a_cmdBuff);
+        }
+
+        static void RecordCommandsOfCopyingToCubemapFace(const uint32_t a_face, VkCommandBuffer a_cmdBuff, Texture& a_srcTexutre,
+                CubeTexture* a_cubemap)
+        {
+            VkImageMemoryBarrier imgBar = a_srcTexutre.makeBarrier(a_srcTexutre.wholeImageRange(), 0, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            a_srcTexutre.changeImageLayout(a_cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+            imgBar = a_cubemap->makeBarrier(a_cubemap->wholeImageRange(a_face, 1), 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            a_cubemap->changeImageLayout(a_cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+        }
+
+        static void RecordDrawingBuffer(VkDevice a_device, VkFramebuffer a_swapChainFramebuffer, FramebuffersOffscreen a_offscreenFrameBuffers,
+                VkExtent2D a_frameBufferExtent, RenderPasses a_renderPasses, const std::unordered_map<std::string, RenderObject>& a_objects,
+                VkCommandBuffer a_cmdBuffer, std::unordered_map<std::string, Pipe>& a_pipes, Attachments& a_attachments,
+                InputCubeTexture& a_cubemap) 
+        {
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+            if (vkBeginCommandBuffer(a_cmdBuffer, &beginInfo) != VK_SUCCESS) 
+                throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to begin recording command buffer!");
+
+            {
+                VkViewport viewport{};
+                viewport.width    = (float)CUBE_SIDE;
+                viewport.height   = (float)CUBE_SIDE;
+                viewport.minDepth = 0.0f;
+                viewport.maxDepth = 1.0f;
+                vkCmdSetViewport(a_cmdBuffer, 0, 1, &viewport);
+
+                VkRect2D scissor{};
+                scissor.extent = { (uint32_t)CUBE_SIDE, (uint32_t)CUBE_SIDE };
+                vkCmdSetScissor(a_cmdBuffer, 0, 1, &scissor);
+            }
+
+            for (uint32_t face{}; face < 6; ++face)
+            {
+                RecordCommandsToRenderForCubemapFace(a_offscreenFrameBuffers.shadowCubemapFrameBuffer, a_renderPasses.shadowCubemapPass,
+                        a_pipes["shadow cubemap"], face, a_cmdBuffer, a_objects);
+                RecordCommandsOfCopyingToCubemapFace(face, a_cmdBuffer, a_attachments.offscreenColor, a_cubemap.shadowCubemap);
+            }
+
+            VkClearValue colorClear;
+            colorClear.color = { {  1.0f, 0.7f, 0.6f, 1.0f } };
+            colorClear.color = { {  0.0f, 0.0f, 0.0f, 1.0f } };
+            //colorClear.color = { {  1.0f, 0.55f, 0.15f, 1.0f } };
+
+            VkClearValue depthClear;
+            depthClear.depthStencil.depth = 1.f;
+
+            std::vector<VkClearValue> clearValues{ colorClear, depthClear };
+
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass        = a_renderPasses.finalRenderPass;
+            renderPassInfo.framebuffer       = a_swapChainFramebuffer;
+            renderPassInfo.renderArea.offset = { 0, 0 };
+            renderPassInfo.renderArea.extent = a_frameBufferExtent;
+            renderPassInfo.clearValueCount  = clearValues.size();
+            renderPassInfo.pClearValues     = clearValues.data();
+
+            {
+                VkViewport viewport{};
+                viewport.width    = (float)a_frameBufferExtent.width;
+                viewport.height   = (float)a_frameBufferExtent.height;
+                viewport.minDepth = 0.0f;
+                viewport.maxDepth = 1.0f;
+                vkCmdSetViewport(a_cmdBuffer, 0, 1, &viewport);
+
+                VkRect2D scissor{};
+                scissor.extent = a_frameBufferExtent;
+                vkCmdSetScissor(a_cmdBuffer, 0, 1, &scissor);
+            }
+
+            vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuffer, nullptr, camera());
 
             vkCmdEndRenderPass(a_cmdBuffer);
 
@@ -922,6 +1060,31 @@ class Application
             }
         }
 
+        static void CreateShadowmapTexture(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
+                CubeTexture& a_cubemap)
+        {
+            VkCommandBufferAllocateInfo allocInfo = {};
+            allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.commandPool        = a_pool;
+            allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandBufferCount = 1;
+
+            VkCommandBuffer cmdBuff{};
+            if (vkAllocateCommandBuffers(a_device, &allocInfo, &cmdBuff) != VK_SUCCESS)
+                throw std::runtime_error("[CopyBufferToTexure]: failed to allocate command buffer!");
+
+            a_cubemap.setExtent(VkExtent3D{uint32_t(CUBE_SIDE), uint32_t(CUBE_SIDE), 1});
+            a_cubemap.create(a_device, a_physDevice, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32_SFLOAT);
+
+            vkResetCommandBuffer(cmdBuff, 0);
+            VkImageMemoryBarrier imgBar = a_cubemap.makeBarrier(a_cubemap.wholeImageRange(0, 6), 0, VK_ACCESS_SHADER_READ_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            a_cubemap.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            RunCommandBuffer(cmdBuff, a_queue, a_device);
+
+            vkFreeCommandBuffers(a_device, a_pool, 1, &cmdBuff);
+        }
+
         static void CreateAttachments(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue, Attachments& a_attachments)
         {
             VkCommandBufferAllocateInfo allocInfo = {};
@@ -956,17 +1119,6 @@ class Application
             offscreenDepth.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
             RunCommandBuffer(cmdBuff, a_queue, a_device);
 
-            // Shadow cubemap renderpass - cube shadow map attachment
-            CubeTexture& shadowCubemap = a_attachments.shadowCubemap;
-            shadowCubemap.setExtent(VkExtent3D{uint32_t(CUBE_SIDE), uint32_t(CUBE_SIDE), 1});
-            shadowCubemap.create(a_device, a_physDevice, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32_SFLOAT);
-
-            vkResetCommandBuffer(cmdBuff, 0);
-            imgBar = shadowCubemap.makeBarrier(shadowCubemap.wholeImageRange(), 0, VK_ACCESS_SHADER_READ_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            shadowCubemap.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-            RunCommandBuffer(cmdBuff, a_queue, a_device);
-
             // Final renderpass - depth attachment
             Texture& presentDepth = a_attachments.presentDepth;
             presentDepth.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
@@ -979,18 +1131,6 @@ class Application
             RunCommandBuffer(cmdBuff, a_queue, a_device);
 
             vkFreeCommandBuffers(a_device, a_pool, 1, &cmdBuff);
-        }
-
-        static void CreateUniformBuffers(VkDevice a_device, VkPhysicalDevice a_physDevice, const size_t a_bufferSize, std::vector<VkBuffer>& a_ubos,
-                std::vector<VkDeviceMemory>& a_ubosMemory, size_t a_count)
-        {
-            a_ubos.resize(a_count);
-            a_ubosMemory.resize(a_count);
-
-            for (size_t i{}; i < a_count; ++i)
-            {
-                CreateHostVisibleBuffer(a_device, a_physDevice, a_bufferSize, &(a_ubos[i]), &(a_ubosMemory[i]), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
-            }
         }
 
         static void CreateHostVisibleBuffer(VkDevice a_device, VkPhysicalDevice a_physDevice, const size_t a_bufferSize,
@@ -1111,8 +1251,8 @@ class Application
                 throw std::runtime_error("[DrawFrame]: failed to reset command buffer!");
             }
 
-            RecordCommandBuffer(m_device, m_screen.swapChainFramebuffers[imageIndex], m_screen.swapChainExtent, m_finalRenderPass, m_renerables,
-                    m_uniformBuffers[imageIndex], m_uniformBuffersMemory[imageIndex], m_drawCommandBuffers[imageIndex], imageIndex);
+            RecordDrawingBuffer(m_device, m_screen.swapChainFramebuffers[imageIndex], m_framebuffersOffscreen, m_screen.swapChainExtent,
+                    m_renderPasses, m_renerables, m_drawCommandBuffers[imageIndex], m_pipes, m_attachments, m_shadowCubemap);
 
             VkSemaphore      waitSemaphores[]{ m_sync.imageAvailableSemaphores[m_currentFrame] };
             VkPipelineStageFlags waitStages[]{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -1224,8 +1364,9 @@ class Application
                 tex.second.cleanup();
             }
 
+            m_shadowCubemapTexture.cleanup();
+
             m_attachments.presentDepth.cleanup();
-            m_attachments.shadowCubemap.cleanup();
             m_attachments.offscreenDepth.cleanup();
             m_attachments.offscreenColor.cleanup();
 
@@ -1235,24 +1376,11 @@ class Application
                 vkDestroyPipelineLayout(m_device, pipe.second.pipelineLayout, nullptr);
             }
 
-            for (auto inTex : m_inputTextures)
-            {
-                vkDestroyDescriptorPool(m_device, inTex.second.descriptorPool, nullptr);
-            }
+            vkDestroyDescriptorPool(m_device, m_DSPools.textureDSPool, nullptr);
+            vkDestroyDescriptorSetLayout(m_device, m_DSLayouts.textureOnlyLayout, nullptr);
 
-            vkDestroyDescriptorSetLayout(m_device, m_sceneDSLayout, nullptr);
-
-            for (auto& uboMem : m_uniformBuffersMemory)
-            {
-                vkFreeMemory(m_device, uboMem, nullptr);
-            }
-            for (auto& ubo : m_uniformBuffers)
-            {
-                vkDestroyBuffer(m_device, ubo, nullptr);
-            }
-
-            vkDestroyRenderPass(m_device, m_finalRenderPass, nullptr);
-            vkDestroyRenderPass(m_device, m_shadowCubemapPass, nullptr);
+            vkDestroyRenderPass(m_device, m_renderPasses.finalRenderPass, nullptr);
+            vkDestroyRenderPass(m_device, m_renderPasses.shadowCubemapPass, nullptr);
 
             if (enableValidationLayers)
             {
@@ -1273,7 +1401,7 @@ class Application
             for (auto framebuffer : m_screen.swapChainFramebuffers) {
                 vkDestroyFramebuffer(m_device, framebuffer, nullptr);
             }
-            vkDestroyFramebuffer(m_device, m_shadowCubemapFrameBuffer, nullptr);
+            vkDestroyFramebuffer(m_device, m_framebuffersOffscreen.shadowCubemapFrameBuffer, nullptr);
 
             for (auto imageView : m_screen.swapChainImageViews) {
                 vkDestroyImageView(m_device, imageView, nullptr);
