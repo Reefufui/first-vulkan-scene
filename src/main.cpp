@@ -218,20 +218,24 @@ class Application
                 if (vkAllocateCommandBuffers(a_device, &allocInfo, &cmdBuff) != VK_SUCCESS)
                     throw std::runtime_error("[CopyBufferToTexure]: failed to allocate command buffer!");
 
-                vkResetCommandBuffer(cmdBuff, 0);
-                VkImageMemoryBarrier imgBar = a_texture.makeBarrier(a_texture.wholeImageRange(), 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-                a_texture.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-                RunCommandBuffer(cmdBuff, a_queue, a_device);
+                VkCommandBufferBeginInfo beginInfo{};
+                beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-                vkResetCommandBuffer(cmdBuff, 0);
-                a_texture.copyBufferToTexture(cmdBuff, stagingBuffer);
-                RunCommandBuffer(cmdBuff, a_queue, a_device);
+                VK_CHECK_RESULT(vkBeginCommandBuffer(cmdBuff, &beginInfo));
+                {
+                    VkImageMemoryBarrier imgBar = a_texture.makeBarrier(a_texture.wholeImageRange(), 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                    a_texture.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-                vkResetCommandBuffer(cmdBuff, 0);
-                imgBar = a_texture.makeBarrier(a_texture.wholeImageRange(), 0, VK_ACCESS_SHADER_READ_BIT,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                a_texture.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                    a_texture.copyBufferToTexture(cmdBuff, stagingBuffer);
+
+                    imgBar = a_texture.makeBarrier(a_texture.wholeImageRange(), 0, VK_ACCESS_SHADER_READ_BIT,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    a_texture.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                }
+                VK_CHECK_RESULT(vkEndCommandBuffer(cmdBuff));
+
                 RunCommandBuffer(cmdBuff, a_queue, a_device);
 
                 vkFreeCommandBuffers(a_device, a_pool, 1, &cmdBuff);
@@ -719,6 +723,10 @@ class Application
                 {
                     pipelineLayoutInfo.pSetLayouts = a_dsLayouts.data();
                 }
+                else
+                {
+                    pipelineLayoutInfo.pSetLayouts = nullptr;
+                }
 
                 VkPipelineLayout pipelineLayout{};
                 if (vkCreatePipelineLayout(a_device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
@@ -833,7 +841,7 @@ class Application
         }
 
         static void RecordCommandsOfDrawingRenderables(std::unordered_map<std::string, RenderObject> a_objects, VkCommandBuffer a_cmdBuffer,
-                const Pipe* a_specialPipeline, glm::mat4 a_vpMatrix)
+                const Pipe* a_specialPipeline, glm::mat4 a_vpMatrix, InputCubeTexture a_shadowCubemap)
         {
             bool  specialPipeline{ a_specialPipeline != nullptr };
             Mesh* previousMesh{nullptr};
@@ -859,8 +867,14 @@ class Application
 
                 if (!specialPipeline)
                 {
-                    vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pLayout, 0, 1,
-                            &(obj.texture->descriptorSet), 0, nullptr);
+                    std::vector<VkDescriptorSet> setsToBind{
+                        obj.texture->descriptorSet, a_shadowCubemap.descriptorSet
+                    };
+
+                    vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pLayout, 0,
+                            setsToBind.size(),
+                            setsToBind.data(),
+                            0, nullptr);
                 }
 
                 PushConstants constants{};
@@ -927,7 +941,7 @@ class Application
 
             vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, viewMatrix); 
+            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, viewMatrix, InputCubeTexture{}); 
 
             vkCmdEndRenderPass(a_cmdBuff);
         }
@@ -939,10 +953,19 @@ class Application
                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
             a_srcTexutre.changeImageLayout(a_cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-            imgBar = a_cubemap->makeBarrier(a_cubemap->wholeImageRange(a_face, 1), 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+            imgBar = a_cubemap->makeBarrier(a_cubemap->oneFaceRange(a_face), 0, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             a_cubemap->changeImageLayout(a_cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
+            a_cubemap->copyImageToCubeface(a_cmdBuff, a_srcTexutre.getImage(), a_face);
+
+            imgBar = a_srcTexutre.makeBarrier(a_srcTexutre.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            a_srcTexutre.changeImageLayout(a_cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+            imgBar = a_cubemap->makeBarrier(a_cubemap->oneFaceRange(a_face), 0, VK_ACCESS_SHADER_READ_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            a_cubemap->changeImageLayout(a_cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
         }
 
         static void RecordDrawingBuffer(VkDevice a_device, VkFramebuffer a_swapChainFramebuffer, FramebuffersOffscreen a_offscreenFrameBuffers,
@@ -1011,7 +1034,7 @@ class Application
 
             vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuffer, nullptr, camera());
+            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuffer, nullptr, camera(), a_cubemap);
 
             vkCmdEndRenderPass(a_cmdBuffer);
 
@@ -1073,13 +1096,21 @@ class Application
             if (vkAllocateCommandBuffers(a_device, &allocInfo, &cmdBuff) != VK_SUCCESS)
                 throw std::runtime_error("[CopyBufferToTexure]: failed to allocate command buffer!");
 
-            a_cubemap.setExtent(VkExtent3D{uint32_t(CUBE_SIDE), uint32_t(CUBE_SIDE), 1});
-            a_cubemap.create(a_device, a_physDevice, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32_SFLOAT);
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-            vkResetCommandBuffer(cmdBuff, 0);
-            VkImageMemoryBarrier imgBar = a_cubemap.makeBarrier(a_cubemap.wholeImageRange(0, 6), 0, VK_ACCESS_SHADER_READ_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            a_cubemap.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            VK_CHECK_RESULT(vkBeginCommandBuffer(cmdBuff, &beginInfo));
+            {
+                a_cubemap.setExtent(VkExtent3D{uint32_t(CUBE_SIDE), uint32_t(CUBE_SIDE), 1});
+                a_cubemap.create(a_device, a_physDevice, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32_SFLOAT);
+
+                VkImageMemoryBarrier imgBar = a_cubemap.makeBarrier(a_cubemap.wholeImageRange(), 0, VK_ACCESS_SHADER_READ_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                a_cubemap.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            }
+            VK_CHECK_RESULT(vkEndCommandBuffer(cmdBuff));
+
             RunCommandBuffer(cmdBuff, a_queue, a_device);
 
             vkFreeCommandBuffers(a_device, a_pool, 1, &cmdBuff);
@@ -1097,37 +1128,40 @@ class Application
             if (vkAllocateCommandBuffers(a_device, &allocInfo, &cmdBuff) != VK_SUCCESS)
                 throw std::runtime_error("[CopyBufferToTexure]: failed to allocate command buffer!");
 
-            // Shadow cubemap renderpass - color attachment
-            Texture& offscreenColor = a_attachments.offscreenColor;
-            offscreenColor.setExtent(VkExtent3D{uint32_t(CUBE_SIDE), uint32_t(CUBE_SIDE), 1});
-            offscreenColor.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_FORMAT_R32_SFLOAT);
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-            vkResetCommandBuffer(cmdBuff, 0);
-            VkImageMemoryBarrier imgBar = offscreenColor.makeBarrier(offscreenColor.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-            offscreenColor.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-            RunCommandBuffer(cmdBuff, a_queue, a_device);
+            VK_CHECK_RESULT(vkBeginCommandBuffer(cmdBuff, &beginInfo));
+            {
+                // Shadow cubemap renderpass - color attachment
+                Texture& offscreenColor = a_attachments.offscreenColor;
+                offscreenColor.setExtent(VkExtent3D{uint32_t(CUBE_SIDE), uint32_t(CUBE_SIDE), 1});
+                offscreenColor.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_FORMAT_R32_SFLOAT);
 
-            // Shadow cubemap renderpass - depth attachment
-            Texture& offscreenDepth = a_attachments.offscreenDepth;
-            offscreenDepth.setExtent(VkExtent3D{uint32_t(CUBE_SIDE), uint32_t(CUBE_SIDE), 1});
-            offscreenDepth.create(a_device, a_physDevice, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_FORMAT_D32_SFLOAT);
+                VkImageMemoryBarrier imgBar = offscreenColor.makeBarrier(offscreenColor.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                offscreenColor.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
-            vkResetCommandBuffer(cmdBuff, 0);
-            imgBar = offscreenDepth.makeBarrier(offscreenDepth.wholeImageRange(), 0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-            offscreenDepth.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
-            RunCommandBuffer(cmdBuff, a_queue, a_device);
+                // Shadow cubemap renderpass - depth attachment
+                Texture& offscreenDepth = a_attachments.offscreenDepth;
+                offscreenDepth.setExtent(VkExtent3D{uint32_t(CUBE_SIDE), uint32_t(CUBE_SIDE), 1});
+                offscreenDepth.create(a_device, a_physDevice, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_FORMAT_D32_SFLOAT);
 
-            // Final renderpass - depth attachment
-            Texture& presentDepth = a_attachments.presentDepth;
-            presentDepth.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
-            presentDepth.create(a_device, a_physDevice, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_FORMAT_D32_SFLOAT);
+                imgBar = offscreenDepth.makeBarrier(offscreenDepth.wholeImageRange(), 0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+                offscreenDepth.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
 
-            vkResetCommandBuffer(cmdBuff, 0);
-            imgBar = presentDepth.makeBarrier(presentDepth.wholeImageRange(), 0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-            presentDepth.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
+                // Final renderpass - depth attachment
+                Texture& presentDepth = a_attachments.presentDepth;
+                presentDepth.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
+                presentDepth.create(a_device, a_physDevice, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_FORMAT_D32_SFLOAT);
+
+                imgBar = presentDepth.makeBarrier(presentDepth.wholeImageRange(), 0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+                presentDepth.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
+            }
+            VK_CHECK_RESULT(vkEndCommandBuffer(cmdBuff));
             RunCommandBuffer(cmdBuff, a_queue, a_device);
 
             vkFreeCommandBuffers(a_device, a_pool, 1, &cmdBuff);

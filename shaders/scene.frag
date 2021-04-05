@@ -16,8 +16,8 @@ layout(location = 0) in VOUT
 
 layout(location = 0) out vec4 color;
 
-layout(binding = 0) uniform sampler2D   texSampler;
-layout(binding = 1) uniform samplerCube shadowCubemap;
+layout(set = 0, binding = 0) uniform sampler2D   texSampler;
+layout(set = 1, binding = 0) uniform samplerCube shadowCubemap;
 
 void main()
 {
@@ -31,7 +31,6 @@ void main()
 
     color = IAmbient + texture(texSampler, vInput.uv) * IDiffuse;
 
-/*
     vec3 lightVec = vInput.worldPos - vInput.lightPos;
     float sampledDist = texture(shadowCubemap, vInput.lightVector).r;
     float dist = length(lightVec);
@@ -39,5 +38,4 @@ void main()
     float shadow = (dist <= sampledDist + EPSILON) ? 1.0 : SHADOW_OPACITY;
 
     color.rgb *= shadow;
-    */
 }

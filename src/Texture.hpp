@@ -47,9 +47,11 @@ class Texture
 class CubeTexture : public Texture
 {
     public:
-        VkImageSubresourceRange wholeImageRange(uint32_t a_from, uint32_t a_count);
+        VkImageSubresourceRange oneFaceRange(uint32_t a_face);
+        VkImageSubresourceRange wholeImageRange();
         void loadFromJPG(const char* a_filename);
         void create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a_usage, VkFormat a_format);
+        void copyImageToCubeface(VkCommandBuffer& a_cmdBuff, VkImage a_image, uint32_t a_face);
 };
 
 #endif // TEXTURE_HPP
