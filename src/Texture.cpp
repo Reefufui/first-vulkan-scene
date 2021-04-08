@@ -1,3 +1,5 @@
+// created in 2021 by Andrey Treefonov https://github.com/Reefufui
+
 #include "vk_utils.h"
 #include "Texture.hpp"
 
@@ -5,8 +7,6 @@
 #include <iostream>
 #include <cassert>
 #include <cstring>
-
-const int TEXTURE_SIZE = 1000;
 
 void Texture::loadFromJPG(const char* a_filename)
 {
@@ -146,13 +146,19 @@ VkImageSubresourceRange CubeTexture::wholeImageRange()
     return rangeWholeImage;
 }
 
+VkImageSubresourceRange CubeTexture::oneFaceRange(uint32_t a_face)
+{
+    VkImageSubresourceRange rangeWholeImage{};
+    rangeWholeImage.aspectMask     = m_aspect;
+    rangeWholeImage.baseMipLevel   = 0;
+    rangeWholeImage.levelCount     = 1;
+    rangeWholeImage.baseArrayLayer = a_face;
+    rangeWholeImage.layerCount     = 1;
+    return rangeWholeImage;
+}
+
 void Texture::changeImageLayout(VkCommandBuffer& a_cmdBuff, VkImageMemoryBarrier& a_imBar, VkPipelineStageFlags a_srcStage, VkPipelineStageFlags a_dstStage)
 {
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    VK_CHECK_RESULT(vkBeginCommandBuffer(a_cmdBuff, &beginInfo));
-
     vkCmdPipelineBarrier(a_cmdBuff,
             a_srcStage,
             a_dstStage,
@@ -160,36 +166,37 @@ void Texture::changeImageLayout(VkCommandBuffer& a_cmdBuff, VkImageMemoryBarrier
             0, nullptr,
             0, nullptr,
             1, &a_imBar);
-
-    VK_CHECK_RESULT(vkEndCommandBuffer(a_cmdBuff));
 }
 
 void Texture::copyBufferToTexture(VkCommandBuffer& a_cmdBuff, VkBuffer a_cpuBuffer)
 {
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    VK_CHECK_RESULT(vkBeginCommandBuffer(a_cmdBuff, &beginInfo));
+    VkImageSubresourceLayers shittylayers{};
+    shittylayers.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    shittylayers.mipLevel       = 0;
+    shittylayers.baseArrayLayer = 0;
+    shittylayers.layerCount     = 1;
 
-    {
-        VkImageSubresourceLayers shittylayers{};
-        shittylayers.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        shittylayers.mipLevel       = 0;
-        shittylayers.baseArrayLayer = 0;
-        shittylayers.layerCount     = 1;
+    VkBufferImageCopy wholeRegion = {};
+    wholeRegion.bufferOffset      = 0;
+    wholeRegion.bufferRowLength   = m_width;
+    wholeRegion.bufferImageHeight = m_height;
+    wholeRegion.imageExtent       = m_extent;
+    wholeRegion.imageOffset       = VkOffset3D{};
+    wholeRegion.imageSubresource  = shittylayers;
 
-        VkBufferImageCopy wholeRegion = {};
-        wholeRegion.bufferOffset      = 0;
-        wholeRegion.bufferRowLength   = m_width;
-        wholeRegion.bufferImageHeight = m_height;
-        wholeRegion.imageExtent       = m_extent;
-        wholeRegion.imageOffset       = VkOffset3D{0,0,0};
-        wholeRegion.imageSubresource  = shittylayers;
+    vkCmdCopyBufferToImage(a_cmdBuff, a_cpuBuffer, m_imageGPU, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &wholeRegion);
+}
 
-        vkCmdCopyBufferToImage(a_cmdBuff, a_cpuBuffer, m_imageGPU, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &wholeRegion);
-    }
+void CubeTexture::copyImageToCubeface(VkCommandBuffer& a_cmdBuff, VkImage a_image, uint32_t a_face)
+{
+    VkImageCopy copyRegion{};
+    copyRegion.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    copyRegion.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, a_face, 1 };
+    copyRegion.srcOffset      = VkOffset3D{};
+    copyRegion.dstOffset      = VkOffset3D{};
+    copyRegion.extent         = m_extent;
 
-    VK_CHECK_RESULT(vkEndCommandBuffer(a_cmdBuff));
+    vkCmdCopyImage(a_cmdBuff, a_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_imageGPU, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
 }
 
 void Texture::cleanup()
@@ -273,6 +280,7 @@ void CubeTexture::create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a
     VK_CHECK_RESULT(vkCreateImageView(a_device, &imageViewInfo, nullptr, &m_imageView));
 }
 
+// TODO
 void CubeTexture::loadFromJPG(const char* a_filename)
 {
     int width{};

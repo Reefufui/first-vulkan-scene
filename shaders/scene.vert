@@ -1,29 +1,39 @@
 #version 450
 
 layout (location = 0) in vec3 vPosition;
-layout (location = 1) in vec3 vColor;
-layout (location = 2) in vec3 vNormal;
-layout (location = 3) in vec2 vUVCoord;
+layout (location = 1) in vec3 vNormal;
+layout (location = 2) in vec2 vUVCoord;
 
-layout (location = 0) out vec3 fColor;
-layout (location = 1) out vec2 fTexCoord;
-
-layout(binding = 0) uniform UniformBufferObject
+layout (location = 0) out VOUT
 {
-    mat4 mvp;
-} ubo;
+    vec3 normal;
+    vec3 worldModel;
+    vec3 worldLight;
+    vec2 uv;
+} vOut;
+
+out gl_PerVertex
+{
+    vec4 gl_Position;
+};
 
 layout( push_constant ) uniform constants
 {
-    vec4 data;
-    mat4 mvp;
+    mat4 model;
+    mat4 vp; // projection * view
+    vec3 lightPos;
 } PushConstants;
 
 void main() 
-{	
-    fColor = vNormal;
-    fTexCoord = vUVCoord;
+{
+    vec4 worldPosition = PushConstants.model * vec4(vPosition, 1.0f);
 
-    gl_Position = PushConstants.mvp * vec4(vPosition, 1.0f);
+    vOut.uv         = vUVCoord;
+    vOut.worldLight = PushConstants.lightPos;
+    vOut.worldModel = worldPosition.xyz;
+    vOut.normal     = vNormal;
+
+    // camera POV
+    gl_Position = PushConstants.vp * worldPosition;
 }
 

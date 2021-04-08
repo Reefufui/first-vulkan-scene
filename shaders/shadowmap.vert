@@ -1,25 +1,29 @@
 #version 450
 
-layout (location = 0) in vec3 position;
+layout (location = 0) in vec3 vPosition;
+layout (location = 1) in vec3 vNormal;
+layout (location = 2) in vec2 vUVCoord;
 
-layout (location = 0) out vec4 fPosition;
-layout (location = 1) out vec3 fLightPosition;
+layout (location = 0) out VOUT
+{
+    vec4 position;
+    vec3 lightPosition;
+} vOut;
 
 layout(push_constant) uniform PushConsts 
 {
-    mat4 mvp;
+    mat4 model;
+    mat4 vp; // pjocetion * view
     vec3 lightPos;
 } pushConstants;
- 
-out gl_PerVertex 
-{
-    vec4 gl_Position;
-};
- 
+
 void main()
 {
-    fPosition = vec4(position, 1.0);  
-    gl_Position = pushConstants.mvp * fPosition;
-    fLightPosition = pushConstants.lightPos; 
+    // positions in world coordinates
+    vOut.position = pushConstants.model * vec4(vPosition, 1.0f);
+    vOut.lightPosition = pushConstants.lightPos; 
+
+    // camera POV
+    gl_Position = pushConstants.vp * vOut.position;
 }
 

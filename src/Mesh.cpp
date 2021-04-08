@@ -1,3 +1,5 @@
+// created in 2021 by Andrey Treefonov https://github.com/Reefufui
+
 #include "Mesh.hpp"
 #include "tqdm.h"
 
@@ -59,26 +61,24 @@ void Mesh::loadFromOBJ(const char* a_filename)
 
     for (const auto& shape : shapes)
     {
+#ifdef SHOW_BARS
         tqdm bar{};
         bar.set_theme_line();
         bar.set_label(std::string("Loading ") + a_filename);
         int i{};
-
+#endif
         for (const auto& index : shape.mesh.indices)
         {
+#ifdef SHOW_BARS
             bar.progress(i++, shape.mesh.indices.size());
+#endif
             Vertex vertex{};
 
-            /////////////////////////////////////////////////////////////
             vertex.position = {
                 attrib.vertices[3 * index.vertex_index + 0],
                 attrib.vertices[3 * index.vertex_index + 1],
                 attrib.vertices[3 * index.vertex_index + 2]
             };
-
-            /////////////////////////////////////////////////////////////
-            vertex.color = { 0.58f, 0.29f, 0.0f }; //brown
-            /////////////////////////////////////////////////////////////
 
             if (hasNormals)
             {
@@ -101,7 +101,6 @@ void Mesh::loadFromOBJ(const char* a_filename)
                 };
             }
 
-
             if (!uniqueVertices.count(vertex))
             {
                 uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
@@ -111,7 +110,9 @@ void Mesh::loadFromOBJ(const char* a_filename)
             indices.push_back(uniqueVertices[vertex]);
         }
 
+#ifdef SHOW_BARS
         bar.finish();
+#endif
     }
 }
 
