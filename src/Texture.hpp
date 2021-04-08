@@ -39,7 +39,7 @@ class Texture
 
         virtual VkImageSubresourceRange wholeImageRange();
 
-        virtual void loadFromJPG(const char* a_filename);
+        virtual void loadFromPNG(const char* a_filename);
         virtual void create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a_usage, VkFormat a_format);
         void         copyBufferToTexture(VkCommandBuffer& a_cmdBuff, VkBuffer a_cpuBuffer);
         void         changeImageLayout(VkCommandBuffer& a_cmdBuff, VkImageMemoryBarrier& a_imBar, VkPipelineStageFlags a_srcStage, VkPipelineStageFlags a_dstStage);
@@ -51,9 +51,19 @@ class CubeTexture : public Texture
     public:
         VkImageSubresourceRange oneFaceRange(uint32_t a_face);
         VkImageSubresourceRange wholeImageRange();
-        void loadFromJPG(const char* a_filename);
+        void loadFromPNG(const char* a_filename);
         void create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a_usage, VkFormat a_format);
         void copyImageToCubeface(VkCommandBuffer& a_cmdBuff, VkImage a_image, uint32_t a_face);
+};
+
+struct InputTexture {
+    Texture*         texture;
+    VkDescriptorSet  descriptorSet;
+};
+
+struct InputCubeTexture {
+    CubeTexture*    shadowCubemap;
+    VkDescriptorSet descriptorSet;
 };
 
 #endif // TEXTURE_HPP

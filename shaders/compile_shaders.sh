@@ -5,3 +5,5 @@ glslangValidator -V shadowmap.vert -o shadowmap.vert.spv
 glslangValidator -V shadowmap.frag -o shadowmap.frag.spv
 glslangValidator -V showcubemap.vert -o showcubemap.vert.spv
 glslangValidator -V showcubemap.frag -o showcubemap.frag.spv
+glslangValidator -V particle.frag -o particle.frag.spv
+glslangValidator -V particle.vert -o particle.vert.spv

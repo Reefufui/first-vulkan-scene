@@ -31,7 +31,7 @@ void main()
     vOut.uv         = vUVCoord;
     vOut.worldLight = PushConstants.lightPos;
     vOut.worldModel = worldPosition.xyz;
-    vOut.normal     = vNormal;
+    vOut.normal     = vec4(PushConstants.vp * worldPosition * vec4(vNormal, 1.0f)).xyz;
 
     // camera POV
     gl_Position = PushConstants.vp * worldPosition;
