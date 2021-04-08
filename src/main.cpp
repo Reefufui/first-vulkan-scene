@@ -1,4 +1,5 @@
 #define GLFW_INCLUDE_VULKAN
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
 #include <GLFW/glfw3.h>
 #include <glm/vec3.hpp> // glm::vec3
@@ -20,17 +21,20 @@
 #include <cstdint>
 #include <cassert>
 #include <unordered_map>
+#include <utility>
 
 #include "vk_utils.h"
+
+//#define SHOW_BARS
 #include "Mesh.hpp"
 #include "Texture.hpp"
 #include "Timer.hpp"
 
-const int WIDTH     = 1600;
-const int HEIGHT    = 900;
+const int WIDTH     = 800;
+const int HEIGHT    = 600;
 const int CUBE_SIDE = 1000;
 
-const int MAX_FRAMES_IN_FLIGHT = 3;
+const int MAX_FRAMES_IN_FLIGHT = 1;
 
 const std::vector<const char*> deviceExtensions{
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
@@ -42,13 +46,14 @@ const bool enableValidationLayers = false;
 const bool enableValidationLayers = true;
 #endif
 
-const static Timer timer{};
-
 class Application 
 {
     private:
 
         GLFWwindow* m_window;
+
+        static Timer s_timer;
+        static bool  s_shadowmapDebug;
 
         VkInstance m_instance;
         std::vector<const char*> m_enabledLayers;
@@ -142,7 +147,71 @@ class Application
             printf("[Debug Report]: %s: %s\n", pLayerPrefix, pMessage);
             return VK_FALSE;
         }
+
         VkDebugReportCallbackEXT debugReportCallback;
+
+        static void keyCallback(GLFWwindow* a_window, int a_key, int a_scancode, int a_action, int a_mods)
+        {
+            if (a_action == GLFW_PRESS)
+            {
+                switch (a_key)
+                {
+                    case GLFW_KEY_1:
+                        s_shadowmapDebug = false;
+                        break;
+                    case GLFW_KEY_2:
+                        s_shadowmapDebug = true;
+                        break;
+                }
+            }
+        }
+
+        static void LoadDebugSquareMesh(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
+                std::unordered_map<std::string, Mesh>& a_meshes)
+        {
+            auto fillMeshBuffer = [&](VkBuffer& a_buffer, VkDeviceMemory& a_memory, void* a_src, VkBufferUsageFlags a_usage, size_t a_size)
+            {
+                VkBuffer stagingBuffer{};
+                VkDeviceMemory stagingBufferMemory{};
+
+                CreateHostVisibleBuffer(a_device, a_physDevice, a_size, &stagingBuffer, &stagingBufferMemory);
+
+                void *mappedMemory = nullptr;
+                vkMapMemory(a_device, stagingBufferMemory, 0, a_size, 0, &mappedMemory);
+                memcpy(mappedMemory, a_src, a_size);
+                vkUnmapMemory(a_device, stagingBufferMemory);
+
+                CreateDeviceLocalBuffer(a_device, a_physDevice, a_size, &a_buffer, &a_memory, a_usage);
+
+                SubmitStagingBuffer(a_device, a_pool, a_queue, stagingBuffer, a_buffer, a_size);
+
+                vkFreeMemory(a_device, stagingBufferMemory, nullptr);
+                vkDestroyBuffer(a_device, stagingBuffer, nullptr);
+            };
+
+            float vertices[] =
+            {
+                // X     Y
+                -1.0f, -1.0f,
+                +1.0f, -1.0f,
+                -1.0f, +1.0f,
+                +1.0f, +1.0f
+            };
+
+            uint32_t indices[] =
+            {
+                0, 1, 2,
+                1, 2, 3
+            };
+
+            Mesh mesh{};
+
+            fillMeshBuffer(mesh.getVBO().buffer, mesh.getVBO().memory, vertices, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 8 * sizeof(float));
+
+            fillMeshBuffer(mesh.getIBO().buffer, mesh.getIBO().memory, indices, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 6 * sizeof(uint32_t));
+
+            a_meshes["debug square"] = mesh;
+        }
 
         static void LoadMeshes(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
                 std::unordered_map<std::string, Mesh>& a_meshes)
@@ -182,15 +251,15 @@ class Application
                         mesh.indices.size() * sizeof(uint32_t));
 
                 a_meshes[meshName] = mesh;
-
             };
 
-            //loadMesh("terrain");
             loadMesh("fireleviathan");
-            loadMesh("freddy-body");
-            loadMesh("freddy-endo");
-            loadMesh("freddy-eyes");
-            loadMesh("freddy-mic");
+            loadMesh("surface");
+            loadMesh("dogeeye");
+            loadMesh("doge");
+
+            // This mesh is not from a file!
+            LoadDebugSquareMesh(a_device, a_physDevice, a_pool, a_queue, a_meshes);
         }
 
         static void LoadTextures(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
@@ -259,13 +328,11 @@ class Application
                 a_textures[textureName] = texture;
             };
 
-            //loadTexture("terrain");
             loadTexture("fireleviathan");
-            loadTexture("body_d");
-            loadTexture("endo_d");
-            loadTexture("eye_d");
-            loadTexture("mic_d");
-            loadTexture("rock");
+            loadTexture("white");
+            loadTexture("troll");
+            loadTexture("dogeeye");
+            loadTexture("doge");
         }
 
 
@@ -296,11 +363,10 @@ class Application
 
                 {
                     auto found = a_textures.find(textureName);
-                    if (found == a_textures.end())
+                    if (found != a_textures.end())
                     {
-                        throw std::runtime_error(std::string("Texture not found: ") + textureName);
+                        object.texture = &(*found).second;
                     }
-                    object.texture = &(*found).second;
                 }
 
                 object.matrix = glm::mat4(1.0f);
@@ -308,46 +374,29 @@ class Application
                 a_renerables[objectName] = object;
             };
 
-            createRenderable("fireleviathan", "fireleviathan", "scene", "fireleviathan");
-            {
-                glm::mat4& m{ a_renerables["fireleviathan"].matrix };
+            // object / mesh / pipeline / texture
 
-                m = glm::translate(m, glm::vec3(0.0f, 15.0f, 7.0f));
-                m = glm::rotate(m, glm::radians(180.0f), glm::vec3(0, 1, 0));
-            }
-            //createRenderable("terrain", "terrain", "scene", "terrain");
-            createRenderable("freddy-body", "freddy-body", "scene", "body_d");
-            createRenderable("freddy-endo", "freddy-endo", "scene", "endo_d");
-            createRenderable("freddy-eyes", "freddy-eyes", "scene", "eye_d");
-            createRenderable("freddy-mic", "freddy-mic", "scene", "mic_d");
+            //createRenderable("fireleviathan", "fireleviathan", "scene", "fireleviathan");
+            createRenderable("dogeeye", "dogeeye", "scene", "dogeeye");
+            createRenderable("doge", "doge", "scene", "doge");
+            createRenderable("surface", "surface", "scene", "white");
         }
 
         static void UpdateScene(std::unordered_map<std::string, RenderObject>& a_renerables)
         {
-            {
-                glm::mat4 m{1.0f};
-
-                m = glm::scale(m, glm::vec3(1.0f, 1.0f + 0.1 * (float)sin(timer.elapsed()), 1.0f));
-                m = glm::translate(m, glm::vec3(0.0f, 15.0f, 7.0f));
-                m = glm::rotate(m, glm::radians(180.0f), glm::vec3(0, 1, 0));
-
-                a_renerables["fireleviathan"].matrix = m;
-                //a_renerables["fireleviathan"].matrix = glm::mat4(0.0f);
-            }
+            float radius{ 3.0f };
+            glm::vec3 translation = glm::vec3(radius * (float)sin(s_timer.getTime()), 2.0f, radius * (float)cos(s_timer.getTime()));
 
             {
                 glm::mat4 m{1.0f};
 
-                m = glm::scale(m, glm::vec3(0.08));
-                m = glm::translate(m, glm::vec3(0.0f, -80.0f, 0.0f));
-                m = glm::rotate(m, glm::radians(180.0f), glm::vec3(0, 1, 0));
-                //m = glm::rotate(m, glm::radians(180.0f * (float)sin(timer.elapsed())), glm::vec3(0, 1, 0));
+                m = glm::scale(m, glm::vec3(1.0f, 1.0f + 0.1 * (float)sin(s_timer.getTime()), 1.0f));
+                //m = glm::translate(m, glm::vec3(0.0f, 2.0f, 0.0f));
+                m = glm::translate(m, translation);
+                //m = glm::rotate(m, glm::radians(30.0f * (float)sin(s_timer.getTime())), glm::vec3(0, 1, 0));
 
-                a_renerables["freddy-body"].matrix = m;
-                a_renerables["freddy-endo"].matrix = m;
-                a_renerables["freddy-mic"].matrix = m;
-                m = glm::rotate(m, glm::radians(7.0f * (float)cos(timer.elapsed())), glm::vec3(0, 1, 0));
-                a_renerables["freddy-eyes"].matrix = m;
+                a_renerables["doge"].matrix = m;
+                a_renerables["dogeeye"].matrix = m;
             }
         }
 
@@ -368,7 +417,7 @@ class Application
             CreateTextureOnlyLayout(m_device, &m_DSLayouts.textureOnlyLayout);
             CreateTextureDescriptorPool(m_device, m_DSPools.textureDSPool, m_textures.size() + 1); // + 1 for cubemap
             CreateDSForEachTexture(m_device, &m_DSLayouts.textureOnlyLayout, m_DSPools.textureDSPool, m_inputTextures, m_textures,
-                    m_shadowCubemap, m_shadowCubemapTexture); // even shadow cubemap texture
+                    m_shadowCubemap, m_shadowCubemapTexture);
 
             std::cout << "\tcreating render passes...\n";
             CreateFinalRenderpass(        m_device, &(m_renderPasses.finalRenderPass), m_screen.swapChainImageFormat);
@@ -394,6 +443,7 @@ class Application
             while (!glfwWindowShouldClose(m_window)) 
             {
                 glfwPollEvents();
+                s_timer.timeStamp();
                 UpdateScene(m_renerables);
                 DrawFrame();
             }
@@ -498,14 +548,6 @@ class Application
             subpass.pColorAttachments       = &colorAttachmentRef;
             subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
-            VkSubpassDependency dependency{};
-            dependency.srcSubpass    = VK_SUBPASS_EXTERNAL;
-            dependency.dstSubpass    = 0;
-            dependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dependency.srcAccessMask = 0;
-            dependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
             std::vector<VkAttachmentDescription> attachments{
                 colorAttachment, depthAttachment
             };
@@ -516,8 +558,6 @@ class Application
             renderPassInfo.pAttachments    = attachments.data();
             renderPassInfo.subpassCount    = 1;
             renderPassInfo.pSubpasses      = &subpass;
-            renderPassInfo.dependencyCount = 1;
-            renderPassInfo.pDependencies   = &dependency;
 
             if (vkCreateRenderPass(a_device, &renderPassInfo, nullptr, a_pRenderPass) != VK_SUCCESS)
                 throw std::runtime_error("[CreateShadowCubemapRenderPass]: failed to create render pass!");
@@ -605,7 +645,7 @@ class Application
         static void CreateGraphicsPipelines(VkDevice a_device, VkExtent2D a_screenExtent, RenderPasses a_renderPasses,
                 std::unordered_map<std::string, Pipe>& a_pipes, DSLayouts a_dsLayouts)
         {
-            // same vertex input for each pipeline
+            // initializing default pipeline structures
             VertexInputDescription vertexDescr{ Vertex::getVertexDescription() };
             VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
             vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -614,7 +654,6 @@ class Application
             vertexInputInfo.pVertexBindingDescriptions      = vertexDescr.bindings.data();
             vertexInputInfo.pVertexAttributeDescriptions    = vertexDescr.attributes.data();
 
-            // initializing default pipeline structures
             VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
             inputAssembly.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
             inputAssembly.topology               = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -645,7 +684,7 @@ class Application
             rasterizer.polygonMode             = VK_POLYGON_MODE_FILL;
             rasterizer.lineWidth               = 1.0f;
             rasterizer.cullMode                = VK_CULL_MODE_NONE;
-            rasterizer.frontFace               = VK_FRONT_FACE_CLOCKWISE;
+            rasterizer.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;
             rasterizer.depthBiasEnable         = VK_FALSE;
 
             VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -768,6 +807,19 @@ class Application
 
             std::vector<VkDescriptorSetLayout> shadowCubemapDSLayout(0);
             createPipeline("shadow cubemap", shadowCubemapDSLayout, "shadowmap", a_renderPasses.shadowCubemapPass);
+
+            // different vertex input
+            VkVertexInputBindingDescription   inputBindings{ 0, sizeof(float) * 2, VK_VERTEX_INPUT_RATE_VERTEX };
+            VkVertexInputAttributeDescription attributes{ 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
+            vertexInputInfo = VkPipelineVertexInputStateCreateInfo{};
+            vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            vertexInputInfo.vertexBindingDescriptionCount   = 1;
+            vertexInputInfo.vertexAttributeDescriptionCount = 1;
+            vertexInputInfo.pVertexBindingDescriptions      = &inputBindings;
+            vertexInputInfo.pVertexAttributeDescriptions    = &attributes;
+
+            std::vector<VkDescriptorSetLayout> showCubemapDSLayout{ a_dsLayouts.textureOnlyLayout };
+            createPipeline("show cubemap", showCubemapDSLayout, "showcubemap", a_renderPasses.finalRenderPass);
         }
 
         static void CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, vk_utils::ScreenBufferResources* pScreen,
@@ -816,28 +868,88 @@ class Application
                 throw std::runtime_error("failed to create framebuffer!");
         }
 
-        static glm::mat4 camera()
+        static glm::mat4 Camera()
         {
-            glm::vec3 cameraPos{ glm::vec3(8.0f, 3.5f, -12.0f) };
+            glm::vec3 cameraPos{ glm::vec3(3.f) };
 
             glm::mat4 view = glm::lookAt(
                     cameraPos,                      //eye (cam position)
-                    //glm::vec3(9.5f + sin(timer.elapsed()) * 7.0f, 0.0f, 0.0f),    //center (where we are looking)
-                    glm::vec3(0.0f, 0.0f, 0.0f),    //center (where we are looking)
+                    glm::vec3(0.0f, 2.0f, 0.0f),    //center (where we are looking)
                     glm::vec3(0.f, 1.f, 0.f)        //up (worlds upwards direction)
                     );
 
-            glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)WIDTH / (float)HEIGHT, 0.1f, 70.0f);
-            projection[1][1] *= -1; // vulkan coordinate space workaround
+            glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)WIDTH / (float)HEIGHT, 0.001f, 70.0f);
 
             return projection * view;
         }
 
-        static glm::vec3 light()
+        static glm::vec3 LightPos()
         {
-            glm::vec3 cameraPos{ glm::vec3(0.0f, 100 + sin(timer.elapsed() / 2.0f) * 180.0f, 0.0f) };
+            //glm::vec3 pos = glm::vec3(10.0f * (float)sin(s_timer.getTime()), 2.0f, 10.0f * (float)cos(s_timer.getTime()));
+            glm::vec3 pos = glm::vec3(0.0f, 5.0f, 0.0f);
+            return pos;
+        }
 
-            return cameraPos;
+        static glm::mat4 light(uint32_t a_face)
+        {
+            // lookAt matrix doesnt suit as soon as we cant look directly up/down with it
+            // implenented using basic glm functionality
+
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), -LightPos());
+
+            glm::mat4 view = glm::mat4(1.0f);
+            switch (a_face)
+            {
+                case 0: // +X
+                    view = glm::rotate(view, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+                    break;
+                case 1: // -X
+                    view = glm::rotate(view, glm::radians(-90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+                    break;
+                case 2: // -Y
+                    view = glm::rotate(view, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                    break;
+                case 3: //TODO: debug
+                    view = glm::rotate(view, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                    break;
+                case 4: // +Z
+                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+                    break;
+                case 5: // -Z
+                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+                    break;
+            }
+
+            //    +Y
+            // -X -Z +X +Z
+            //    +Y
+
+            glm::mat4 projection = glm::perspective(glm::radians(90.f), 1.0f, 0.001f, (float)CUBE_SIDE);
+
+            return projection * view * model;
+        }
+
+        static void RecordCommandsOfShowingCubemap(VkDevice a_device, Mesh a_squareMesh, VkCommandBuffer a_cmdBuffer, const Pipe* a_cubemapPipe,
+                InputCubeTexture a_cubeTexture)
+        {
+            vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_cubemapPipe->pipeline);
+
+            vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_cubemapPipe->pipelineLayout, 0, 1,
+                    &a_cubeTexture.descriptorSet, 0, nullptr);
+
+            VkBuffer vbo{ a_squareMesh.getVBO().buffer };
+            VkBuffer ibo{ a_squareMesh.getIBO().buffer };
+
+            std::vector<VkDeviceSize> offsets{ 0 };
+
+            vkCmdBindVertexBuffers(a_cmdBuffer, 0, 1, &vbo, offsets.data());
+            vkCmdBindIndexBuffer(a_cmdBuffer, ibo, 0, VK_INDEX_TYPE_UINT32);
+
+            vkCmdDrawIndexed(a_cmdBuffer, 6, 6, 0, 0, 0); // 6 instances for each cube face
         }
 
         static void RecordCommandsOfDrawingRenderables(std::unordered_map<std::string, RenderObject> a_objects, VkCommandBuffer a_cmdBuffer,
@@ -880,7 +992,7 @@ class Application
                 PushConstants constants{};
                 constants.model    = obj.matrix;
                 constants.vp       = a_vpMatrix;
-                constants.lightPos = light();
+                constants.lightPos = LightPos();
 
                 vkCmdPushConstants(a_cmdBuffer, pLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &constants);
 
@@ -902,7 +1014,7 @@ class Application
                 const uint32_t a_face, VkCommandBuffer a_cmdBuff, const std::unordered_map<std::string, RenderObject>& a_objects)
         {
             std::vector<VkClearValue> clearValues(2);
-            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
             clearValues[1].depthStencil = { 1.0f, 0 };
 
             VkRenderPassBeginInfo renderPassInfo{};
@@ -914,34 +1026,9 @@ class Application
             renderPassInfo.clearValueCount   = clearValues.size();
             renderPassInfo.pClearValues      = clearValues.data();
 
-            glm::mat4 viewMatrix = glm::mat4(1.0f);
-            switch (a_face)
-            {
-                case 0: // POSITIVE_X
-                    viewMatrix = glm::rotate(viewMatrix, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f)); 
-                    viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-                    break;
-                case 1: // NEGATIVE_X
-                    viewMatrix = glm::rotate(viewMatrix, glm::radians(-90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-                    viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-                    break;
-                case 2: // POSITIVE_Y
-                    viewMatrix = glm::rotate(viewMatrix, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-                    break;
-                case 3: // NEGATIVE_Y
-                    viewMatrix = glm::rotate(viewMatrix, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-                    break;
-                case 4: // POSITIVE_Z
-                    viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-                    break;
-                case 5: // NEGATIVE_Z
-                    viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-                    break;
-            }
-
             vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, viewMatrix, InputCubeTexture{}); 
+            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, light(a_face), InputCubeTexture{});
 
             vkCmdEndRenderPass(a_cmdBuff);
         }
@@ -968,10 +1055,38 @@ class Application
             a_cubemap->changeImageLayout(a_cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
         }
 
+        static void SetViewportAndScissor(VkCommandBuffer a_cmdBuffer, const float&& a_width, const float&& a_height, const bool&& a_flipViewport)
+        {
+            VkViewport viewport{};
+
+            if (a_flipViewport)
+            {
+                viewport.x = 0;
+                viewport.y = (float)a_height - 0;
+                viewport.width = (float)a_width;
+                viewport.height = -(float)a_height;
+            }
+            else
+            {
+                viewport.x        = 0;
+                viewport.y        = 0;
+                viewport.width    = (float)a_width;
+                viewport.height   = (float)a_height;
+            }
+
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(a_cmdBuffer, 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.extent = { (uint32_t)a_width, (uint32_t)a_height };
+            vkCmdSetScissor(a_cmdBuffer, 0, 1, &scissor);
+        }
+
         static void RecordDrawingBuffer(VkDevice a_device, VkFramebuffer a_swapChainFramebuffer, FramebuffersOffscreen a_offscreenFrameBuffers,
-                VkExtent2D a_frameBufferExtent, RenderPasses a_renderPasses, const std::unordered_map<std::string, RenderObject>& a_objects,
+                VkExtent2D a_frameBufferExtent, RenderPasses a_renderPasses, std::unordered_map<std::string, RenderObject>& a_objects,
                 VkCommandBuffer a_cmdBuffer, std::unordered_map<std::string, Pipe>& a_pipes, Attachments& a_attachments,
-                InputCubeTexture& a_cubemap) 
+                InputCubeTexture& a_cubemap, std::unordered_map<std::string, Mesh>& a_meshes) 
         {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -980,30 +1095,17 @@ class Application
             if (vkBeginCommandBuffer(a_cmdBuffer, &beginInfo) != VK_SUCCESS) 
                 throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to begin recording command buffer!");
 
-            {
-                VkViewport viewport{};
-                viewport.width    = (float)CUBE_SIDE;
-                viewport.height   = (float)CUBE_SIDE;
-                viewport.minDepth = 0.0f;
-                viewport.maxDepth = 1.0f;
-                vkCmdSetViewport(a_cmdBuffer, 0, 1, &viewport);
-
-                VkRect2D scissor{};
-                scissor.extent = { (uint32_t)CUBE_SIDE, (uint32_t)CUBE_SIDE };
-                vkCmdSetScissor(a_cmdBuffer, 0, 1, &scissor);
-            }
-
             for (uint32_t face{}; face < 6; ++face)
             {
+                SetViewportAndScissor(a_cmdBuffer, (float)CUBE_SIDE, (float)CUBE_SIDE, true);
                 RecordCommandsToRenderForCubemapFace(a_offscreenFrameBuffers.shadowCubemapFrameBuffer, a_renderPasses.shadowCubemapPass,
                         a_pipes["shadow cubemap"], face, a_cmdBuffer, a_objects);
                 RecordCommandsOfCopyingToCubemapFace(face, a_cmdBuffer, a_attachments.offscreenColor, a_cubemap.shadowCubemap);
             }
 
             VkClearValue colorClear;
-            colorClear.color = { {  1.0f, 0.7f, 0.6f, 1.0f } };
+            //colorClear.color = { {  1.0f, 0.7f, 0.6f, 1.0f } };
             colorClear.color = { {  0.0f, 0.0f, 0.0f, 1.0f } };
-            //colorClear.color = { {  1.0f, 0.55f, 0.15f, 1.0f } };
 
             VkClearValue depthClear;
             depthClear.depthStencil.depth = 1.f;
@@ -1016,25 +1118,20 @@ class Application
             renderPassInfo.framebuffer       = a_swapChainFramebuffer;
             renderPassInfo.renderArea.offset = { 0, 0 };
             renderPassInfo.renderArea.extent = a_frameBufferExtent;
-            renderPassInfo.clearValueCount  = clearValues.size();
-            renderPassInfo.pClearValues     = clearValues.data();
+            renderPassInfo.clearValueCount   = clearValues.size();
+            renderPassInfo.pClearValues      = clearValues.data();
 
-            {
-                VkViewport viewport{};
-                viewport.width    = (float)a_frameBufferExtent.width;
-                viewport.height   = (float)a_frameBufferExtent.height;
-                viewport.minDepth = 0.0f;
-                viewport.maxDepth = 1.0f;
-                vkCmdSetViewport(a_cmdBuffer, 0, 1, &viewport);
-
-                VkRect2D scissor{};
-                scissor.extent = a_frameBufferExtent;
-                vkCmdSetScissor(a_cmdBuffer, 0, 1, &scissor);
-            }
-
+            SetViewportAndScissor(a_cmdBuffer, (float)WIDTH, (float)HEIGHT, true);
             vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuffer, nullptr, camera(), a_cubemap);
+            if (s_shadowmapDebug)
+            {
+                RecordCommandsOfShowingCubemap(a_device, a_meshes["debug square"], a_cmdBuffer, &a_pipes["show cubemap"], a_cubemap);
+            }
+            else
+            {
+                RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuffer, nullptr, Camera(), a_cubemap);
+            }
 
             vkCmdEndRenderPass(a_cmdBuffer);
 
@@ -1286,7 +1383,7 @@ class Application
             }
 
             RecordDrawingBuffer(m_device, m_screen.swapChainFramebuffers[imageIndex], m_framebuffersOffscreen, m_screen.swapChainExtent,
-                    m_renderPasses, m_renerables, m_drawCommandBuffers[imageIndex], m_pipes, m_attachments, m_shadowCubemap);
+                    m_renderPasses, m_renerables, m_drawCommandBuffers[imageIndex], m_pipes, m_attachments, m_shadowCubemap, m_meshes);
 
             VkSemaphore      waitSemaphores[]{ m_sync.imageAvailableSemaphores[m_currentFrame] };
             VkPipelineStageFlags waitStages[]{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -1335,6 +1432,8 @@ class Application
             glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
             m_window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+
+            glfwSetKeyCallback(m_window, keyCallback);
 
             std::cout << "\tinitializing vulkan devices and queue...\n";
 
@@ -1461,6 +1560,9 @@ class Application
             MainLoop();
         }
 };
+
+Timer Application::s_timer;
+bool  Application::s_shadowmapDebug;     // "2" binding (normal mode - "1")
 
 int main() 
 {

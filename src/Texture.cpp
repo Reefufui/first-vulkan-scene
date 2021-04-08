@@ -1,3 +1,5 @@
+// created in 2021 by Andrey Treefonov https://github.com/Reefufui
+
 #include "vk_utils.h"
 #include "Texture.hpp"
 
@@ -5,8 +7,6 @@
 #include <iostream>
 #include <cassert>
 #include <cstring>
-
-const int TEXTURE_SIZE = 1000;
 
 void Texture::loadFromJPG(const char* a_filename)
 {
@@ -280,6 +280,7 @@ void CubeTexture::create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a
     VK_CHECK_RESULT(vkCreateImageView(a_device, &imageViewInfo, nullptr, &m_imageView));
 }
 
+// TODO
 void CubeTexture::loadFromJPG(const char* a_filename)
 {
     int width{};

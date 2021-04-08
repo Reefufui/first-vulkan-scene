@@ -1,41 +1,30 @@
 #version 450 core
 
-layout(location = 0) in VOUT
+layout (location = 0) in VOUT
 {
-    vec3 color;
     vec3 normal;
-    vec3 eyePos;
-    vec3 lightVector;
-    vec3 worldPos;
-    vec3 lightPos;
+    vec3 worldModel;
+    vec3 worldLight;
     vec2 uv;
 } vInput;
-
-#define EPSILON 0.15
-#define SHADOW_OPACITY 0.5
 
 layout(location = 0) out vec4 color;
 
 layout(set = 0, binding = 0) uniform sampler2D   texSampler;
 layout(set = 1, binding = 0) uniform samplerCube shadowCubemap;
 
+const float eps    = 0.15f;
+const float shadow = 0.5f;
+
 void main()
 {
-    vec3 N = normalize(vInput.normal);
-    vec3 L = normalize(vec3(1.0f));
-    vec3 Eye = normalize(-vInput.eyePos);
-    vec3 Reflected = normalize(reflect(-vInput.lightVector, vInput.normal));
+    color = texture(texSampler, vInput.uv);
 
-    vec4 IAmbient = vec4(vec3(0.05f), 1.0f);
-    vec4 IDiffuse = vec4(1.0f) * max(dot(vInput.normal, vInput.lightVector), 0.0);
+    vec3 toLight = vInput.worldLight -vInput.worldModel;
 
-    color = IAmbient + texture(texSampler, vInput.uv) * IDiffuse;
-
-    vec3 lightVec = vInput.worldPos - vInput.lightPos;
-    float sampledDist = texture(shadowCubemap, vInput.lightVector).r;
-    float dist = length(lightVec);
-
-    float shadow = (dist <= sampledDist + EPSILON) ? 1.0 : SHADOW_OPACITY;
-
-    color.rgb *= shadow;
+    // shadowmap
+    if (length(toLight) > texture(shadowCubemap, toLight).r + eps)
+    {
+        color.rgb *= shadow;
+    }
 }

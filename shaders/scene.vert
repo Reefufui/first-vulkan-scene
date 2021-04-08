@@ -1,18 +1,14 @@
 #version 450
 
 layout (location = 0) in vec3 vPosition;
-layout (location = 1) in vec3 vColor;
-layout (location = 2) in vec3 vNormal;
-layout (location = 3) in vec2 vUVCoord;
+layout (location = 1) in vec3 vNormal;
+layout (location = 2) in vec2 vUVCoord;
 
 layout (location = 0) out VOUT
 {
-    vec3 color;
     vec3 normal;
-    vec3 eyePos;
-    vec3 lightVector;
-    vec3 worldPos;
-    vec3 lightPos;
+    vec3 worldModel;
+    vec3 worldLight;
     vec2 uv;
 } vOut;
 
@@ -30,14 +26,14 @@ layout( push_constant ) uniform constants
 
 void main() 
 {
-    vOut.color       = vNormal;
-    vOut.normal      = vNormal;
-    vOut.uv          = vUVCoord;
-    vOut.lightPos    = PushConstants.lightPos;
-    vOut.eyePos      = vec3(PushConstants.model * vec4(vPosition, 1.0f));
-    vOut.lightVector = normalize(PushConstants.lightPos - vPosition);
-    vOut.worldPos    = vPosition;
+    vec4 worldPosition = PushConstants.model * vec4(vPosition, 1.0f);
 
-    gl_Position = PushConstants.vp * PushConstants.model * vec4(vPosition, 1.0f);
+    vOut.uv         = vUVCoord;
+    vOut.worldLight = PushConstants.lightPos;
+    vOut.worldModel = worldPosition.xyz;
+    vOut.normal     = vNormal;
+
+    // camera POV
+    gl_Position = PushConstants.vp * worldPosition;
 }
 

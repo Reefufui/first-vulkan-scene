@@ -1,9 +1,8 @@
 #version 450
 
 layout (location = 0) in vec3 vPosition;
-layout (location = 1) in vec3 vColor;
-layout (location = 2) in vec3 vNormal;
-layout (location = 3) in vec2 vUVCoord;
+layout (location = 1) in vec3 vNormal;
+layout (location = 2) in vec2 vUVCoord;
 
 layout (location = 0) out VOUT
 {
@@ -18,16 +17,13 @@ layout(push_constant) uniform PushConsts
     vec3 lightPos;
 } pushConstants;
 
-out gl_PerVertex 
-{
-    vec4 gl_Position;
-};
-
 void main()
 {
-    vOut.position = vec4(vPosition, 1.0);  
+    // positions in world coordinates
+    vOut.position = pushConstants.model * vec4(vPosition, 1.0f);
     vOut.lightPosition = pushConstants.lightPos; 
 
-    gl_Position = pushConstants.vp * pushConstants.model * vOut.position;
+    // camera POV
+    gl_Position = pushConstants.vp * vOut.position;
 }
 

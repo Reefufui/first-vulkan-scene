@@ -1,3 +1,5 @@
+// created in 2021 by Andrey Treefonov https://github.com/Reefufui
+
 #ifndef TEXTURE_HPP
 #define TEXTURE_HPP
 

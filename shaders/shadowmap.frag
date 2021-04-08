@@ -10,6 +10,7 @@ layout (location = 0) out float color;
 
 void main() 
 {
+    // store distance between vertex and light as light's POV image
     vec3 rayVector = vInput.position.xyz - vInput.lightPosition;
     color = length(rayVector);
 }
