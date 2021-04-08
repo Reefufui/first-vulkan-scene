@@ -18,9 +18,11 @@ const float shadow = 0.5f;
 
 void main()
 {
-    color = texture(texSampler, vInput.uv);
-
     vec3 toLight = vInput.worldLight -vInput.worldModel;
+
+    vec4 diffuse = vec4(1.0f) * max(dot(normalize(vInput.normal), normalize(toLight)), 0.0f);
+
+    color = vec4(0.15f, 0.05f, 0.01f, 0.0f) + diffuse * texture(texSampler, vInput.uv);
 
     // shadowmap
     if (length(toLight) > texture(shadowCubemap, toLight).r + eps)

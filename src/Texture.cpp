@@ -30,8 +30,6 @@ void Texture::loadFromPNG(const char* a_filename)
     rgba = new unsigned char[m_size];
     memcpy(rgba, pixels, m_size);
 
-    std::cout << (int)rgba[4] << " " << a_filename << "\n";
-
     stbi_image_free(pixels);
 }
 

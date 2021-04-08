@@ -36,7 +36,6 @@ add_executable(vulkan_shadow_map
     src/Texture.cpp
     src/Texture.hpp
     src/ParticleSystem.hpp
-    src/ParticleSystem.cpp
     src/vendor/stb_image/stb_image.cpp
     )
 
