@@ -8,7 +8,7 @@
 #include <cassert>
 #include <cstring>
 
-void Texture::loadFromJPG(const char* a_filename)
+void Texture::loadFromPNG(const char* a_filename)
 {
     int width{};
     int height{};
@@ -29,6 +29,8 @@ void Texture::loadFromJPG(const char* a_filename)
 
     rgba = new unsigned char[m_size];
     memcpy(rgba, pixels, m_size);
+
+    std::cout << (int)rgba[4] << " " << a_filename << "\n";
 
     stbi_image_free(pixels);
 }
@@ -71,7 +73,7 @@ void Texture::create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a_usa
             samplerInfo.flags        = 0;
             samplerInfo.magFilter    = VK_FILTER_LINEAR;
             samplerInfo.minFilter    = VK_FILTER_LINEAR;
-            samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
             samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
@@ -81,7 +83,7 @@ void Texture::create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a_usa
             samplerInfo.maxLod           = 0;
             samplerInfo.maxAnisotropy    = 1.0;
             samplerInfo.anisotropyEnable = VK_FALSE;
-            samplerInfo.borderColor      = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+            samplerInfo.borderColor      = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
             samplerInfo.unnormalizedCoordinates = VK_FALSE;
         }
 
@@ -255,7 +257,7 @@ void CubeTexture::create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a
             samplerInfo.compareOp      = VK_COMPARE_OP_NEVER;
             samplerInfo.minLod         = 0.0f;
             samplerInfo.maxLod         = 1.0f;
-            samplerInfo.borderColor    = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+            samplerInfo.borderColor    = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
         }
 
         VK_CHECK_RESULT(vkCreateSampler(a_device, &samplerInfo, nullptr, &m_imageSampler));
@@ -281,7 +283,7 @@ void CubeTexture::create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a
 }
 
 // TODO
-void CubeTexture::loadFromJPG(const char* a_filename)
+void CubeTexture::loadFromPNG(const char* a_filename)
 {
     int width{};
     int height{};

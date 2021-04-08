@@ -28,13 +28,14 @@
 //#define SHOW_BARS
 #include "Mesh.hpp"
 #include "Texture.hpp"
+#include "ParticleSystem.hpp"
 #include "Timer.hpp"
 
 const int WIDTH     = 800;
 const int HEIGHT    = 600;
 const int CUBE_SIDE = 1000;
 
-const int MAX_FRAMES_IN_FLIGHT = 1;
+const int MAX_FRAMES_IN_FLIGHT = 3;
 
 const std::vector<const char*> deviceExtensions{
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
@@ -102,16 +103,8 @@ class Application
             VkPipelineLayout              pipelineLayout;
         };
 
-        struct InputTexture {
-            Texture*         texture;
-            VkDescriptorSet  descriptorSet;
-        };
-
-        CubeTexture m_shadowCubemapTexture;
-        struct InputCubeTexture {
-            CubeTexture*    shadowCubemap;
-            VkDescriptorSet descriptorSet;
-        } m_shadowCubemap;
+        CubeTexture      m_shadowCubemapTexture;
+        InputCubeTexture m_shadowCubemap;
 
         struct DSLayouts {
             VkDescriptorSetLayout textureOnlyLayout; // suits cubemap texture as well
@@ -128,11 +121,12 @@ class Application
             glm::mat4      matrix;
         };
 
-        std::unordered_map<std::string, Mesh>         m_meshes;
-        std::unordered_map<std::string, Texture>      m_textures;
-        std::unordered_map<std::string, Pipe>         m_pipes;
-        std::unordered_map<std::string, InputTexture> m_inputTextures;
-        std::unordered_map<std::string, RenderObject> m_renerables;
+        std::unordered_map<std::string, Mesh>           m_meshes;
+        std::unordered_map<std::string, Texture>        m_textures;
+        std::unordered_map<std::string, Pipe>           m_pipes;
+        std::unordered_map<std::string, InputTexture>   m_inputTextures;
+        std::unordered_map<std::string, RenderObject>   m_renerables;
+        std::unordered_map<std::string, ParticleSystem> m_particleSystems;
 
         static VKAPI_ATTR VkBool32 VKAPI_CALL debugReportCallbackFn(
                 VkDebugReportFlagsEXT                       flags,
@@ -164,6 +158,22 @@ class Application
                         break;
                 }
             }
+        }
+
+        static void CreateParticleSystem(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
+                std::unordered_map<std::string, ParticleSystem>& a_particleSystems, std::unordered_map<std::string, InputTexture>& a_IT)
+        {
+            ParticleSystem fire{};
+
+            fire.initParticles(glm::vec3(0.0f, 2.0f, 0.0f), 700);
+
+            CreateHostVisibleBuffer(a_device, a_physDevice, fire.getSize(), &(fire.getVBO()), &(fire.getVBOMemory()),
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+            vkMapMemory(a_device, fire.getVBOMemory(), 0, fire.getSize(), 0, &fire.getMappedMemory());
+
+            fire.attachTexture(&(a_IT["fire"]));
+
+            a_particleSystems["fire"] = fire;
         }
 
         static void LoadDebugSquareMesh(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
@@ -255,6 +265,7 @@ class Application
 
             loadMesh("fireleviathan");
             loadMesh("surface");
+            loadMesh("cube");
             loadMesh("dogeeye");
             loadMesh("doge");
 
@@ -316,10 +327,10 @@ class Application
             {
                 Texture texture{};
 
-                std::string fileName{ "assets/textures/.jpg" };
+                std::string fileName{ "assets/textures/.png" };
                 fileName.insert(fileName.find("."), textureName);
 
-                texture.loadFromJPG(fileName.c_str());
+                texture.loadFromPNG(fileName.c_str());
 
                 texture.create(a_device, a_physDevice, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_SRGB);
 
@@ -333,6 +344,7 @@ class Application
             loadTexture("troll");
             loadTexture("dogeeye");
             loadTexture("doge");
+            loadTexture("fire");
         }
 
 
@@ -380,6 +392,11 @@ class Application
             createRenderable("dogeeye", "dogeeye", "scene", "dogeeye");
             createRenderable("doge", "doge", "scene", "doge");
             createRenderable("surface", "surface", "scene", "white");
+            createRenderable("small cube", "cube", "scene", "troll");
+            a_renerables["small cube"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(-6.5f, 0.5f, 0.5f));
+
+            //createRenderable("cube", "cube", "scene", "troll");
+            //a_renerables["cube"].matrix = glm::scale(glm::mat4(1.0f), glm::vec3(50.0f));
         }
 
         static void UpdateScene(std::unordered_map<std::string, RenderObject>& a_renerables)
@@ -391,8 +408,8 @@ class Application
                 glm::mat4 m{1.0f};
 
                 m = glm::scale(m, glm::vec3(1.0f, 1.0f + 0.1 * (float)sin(s_timer.getTime()), 1.0f));
-                //m = glm::translate(m, glm::vec3(0.0f, 2.0f, 0.0f));
-                m = glm::translate(m, translation);
+                m = glm::translate(m, glm::vec3(0.0f, 2.0f, 0.0f));
+                //m = glm::translate(m, translation);
                 //m = glm::rotate(m, glm::radians(30.0f * (float)sin(s_timer.getTime())), glm::vec3(0, 1, 0));
 
                 a_renerables["doge"].matrix = m;
@@ -430,6 +447,9 @@ class Application
             std::cout << "\tcreating graphics pipelines...\n";
             CreateGraphicsPipelines(m_device, m_screen.swapChainExtent, m_renderPasses, m_pipes, m_DSLayouts);
 
+            std::cout << "\tcreating particle systems...\n";
+            CreateParticleSystem(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_particleSystems, m_inputTextures);
+
             std::cout << "\tcomposing scene...\n";
             ComposeScene(m_renerables, m_pipes, m_meshes, m_inputTextures);
 
@@ -445,6 +465,7 @@ class Application
                 glfwPollEvents();
                 s_timer.timeStamp();
                 UpdateScene(m_renerables);
+                UpdateParticleSystems(m_particleSystems, LightPos());
                 DrawFrame();
             }
 
@@ -802,13 +823,15 @@ class Application
                 vkDestroyShaderModule(a_device, vertShaderStageInfo.module, nullptr);
             };
 
+            // render meshes ///////////////////////////////////////////////////////////
             std::vector<VkDescriptorSetLayout> sceneDSLayouts{ a_dsLayouts.textureOnlyLayout, a_dsLayouts.textureOnlyLayout };
             createPipeline("scene", sceneDSLayouts, "scene", a_renderPasses.finalRenderPass);
 
+            // render to cubemap face //////////////////////////////////////////////////
             std::vector<VkDescriptorSetLayout> shadowCubemapDSLayout(0);
             createPipeline("shadow cubemap", shadowCubemapDSLayout, "shadowmap", a_renderPasses.shadowCubemapPass);
 
-            // different vertex input
+            // display cubemap faces ///////////////////////////////////////////////////
             VkVertexInputBindingDescription   inputBindings{ 0, sizeof(float) * 2, VK_VERTEX_INPUT_RATE_VERTEX };
             VkVertexInputAttributeDescription attributes{ 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
             vertexInputInfo = VkPipelineVertexInputStateCreateInfo{};
@@ -820,6 +843,28 @@ class Application
 
             std::vector<VkDescriptorSetLayout> showCubemapDSLayout{ a_dsLayouts.textureOnlyLayout };
             createPipeline("show cubemap", showCubemapDSLayout, "showcubemap", a_renderPasses.finalRenderPass);
+
+            // render particle system //////////////////////////////////////////////////
+            vertexDescr = ParticleSystem::getVertexDescription();
+            vertexInputInfo = VkPipelineVertexInputStateCreateInfo{};
+            vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            vertexInputInfo.vertexBindingDescriptionCount   = vertexDescr.bindings.size();
+            vertexInputInfo.vertexAttributeDescriptionCount = vertexDescr.attributes.size();
+            vertexInputInfo.pVertexBindingDescriptions      = vertexDescr.bindings.data();
+            vertexInputInfo.pVertexAttributeDescriptions    = vertexDescr.attributes.data();
+
+            inputAssembly.topology                   = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+            depthAndStencil.depthWriteEnable         = VK_FALSE;
+            colorBlendAttachment.blendEnable         = VK_TRUE;
+            colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            colorBlendAttachment.colorBlendOp        = VK_BLEND_OP_ADD;
+            colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            colorBlendAttachment.alphaBlendOp        = VK_BLEND_OP_ADD;
+
+            std::vector<VkDescriptorSetLayout> particleSystemDSLayout{ a_dsLayouts.textureOnlyLayout };
+            createPipeline("particle system", particleSystemDSLayout, "particle", a_renderPasses.finalRenderPass);
         }
 
         static void CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, vk_utils::ScreenBufferResources* pScreen,
@@ -870,11 +915,11 @@ class Application
 
         static glm::mat4 Camera()
         {
-            glm::vec3 cameraPos{ glm::vec3(3.f) };
+            glm::vec3 cameraPos{ glm::vec3(4.0f) };
 
             glm::mat4 view = glm::lookAt(
                     cameraPos,                      //eye (cam position)
-                    glm::vec3(0.0f, 2.0f, 0.0f),    //center (where we are looking)
+                    glm::vec3(0.0f, 0.0f, 0.0f),    //center (where we are looking)
                     glm::vec3(0.f, 1.f, 0.f)        //up (worlds upwards direction)
                     );
 
@@ -885,8 +930,8 @@ class Application
 
         static glm::vec3 LightPos()
         {
-            //glm::vec3 pos = glm::vec3(10.0f * (float)sin(s_timer.getTime()), 2.0f, 10.0f * (float)cos(s_timer.getTime()));
-            glm::vec3 pos = glm::vec3(0.0f, 5.0f, 0.0f);
+            glm::vec3 pos = glm::vec3(5.0f * (float)sin(s_timer.getTime() / 3.0f), 2.0f, 5.0f * (float)cos(s_timer.getTime() / 3.0f));
+            //glm::vec3 pos = glm::vec3(-3.0f, 2.0f, -3.0f);
             return pos;
         }
 
@@ -912,7 +957,7 @@ class Application
                     view = glm::rotate(view, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
                     view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f));
                     break;
-                case 3: //TODO: debug
+                case 3: // +Y
                     view = glm::rotate(view, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
                     view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f));
                     break;
@@ -923,10 +968,6 @@ class Application
                     view = glm::rotate(view, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
                     break;
             }
-
-            //    +Y
-            // -X -Z +X +Z
-            //    +Y
 
             glm::mat4 projection = glm::perspective(glm::radians(90.f), 1.0f, 0.001f, (float)CUBE_SIDE);
 
@@ -950,6 +991,34 @@ class Application
             vkCmdBindIndexBuffer(a_cmdBuffer, ibo, 0, VK_INDEX_TYPE_UINT32);
 
             vkCmdDrawIndexed(a_cmdBuffer, 6, 6, 0, 0, 0); // 6 instances for each cube face
+        }
+
+        static void RecordCommandsOfDrawingParticleSystems(std::unordered_map<std::string, ParticleSystem> a_particleSystems, VkCommandBuffer a_cmdBuffer,
+                std::unordered_map<std::string, Pipe>& a_pipes)
+        {
+            VkPipeline&       pipeline = a_pipes["particle system"].pipeline;
+            VkPipelineLayout& layout   = a_pipes["particle system"].pipelineLayout;
+
+            for (auto& particleSystem : a_particleSystems)
+            {
+                auto& system{ particleSystem.second };
+
+                vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+
+                vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &(system.getTexture()->descriptorSet), 0, nullptr);
+
+                PushConstants constants{};
+                constants.model    = glm::mat4(1.0f);
+                constants.vp       = Camera();
+                constants.lightPos = LightPos();
+
+                vkCmdPushConstants(a_cmdBuffer, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &constants);
+
+                VkDeviceSize offsets[1] = { 0 };
+                vkCmdBindVertexBuffers(a_cmdBuffer, 0, 1, &(system.getVBO()), offsets);
+
+                vkCmdDraw(a_cmdBuffer, system.getParticleCount(), 1, 0, 0);
+            }
         }
 
         static void RecordCommandsOfDrawingRenderables(std::unordered_map<std::string, RenderObject> a_objects, VkCommandBuffer a_cmdBuffer,
@@ -1086,7 +1155,8 @@ class Application
         static void RecordDrawingBuffer(VkDevice a_device, VkFramebuffer a_swapChainFramebuffer, FramebuffersOffscreen a_offscreenFrameBuffers,
                 VkExtent2D a_frameBufferExtent, RenderPasses a_renderPasses, std::unordered_map<std::string, RenderObject>& a_objects,
                 VkCommandBuffer a_cmdBuffer, std::unordered_map<std::string, Pipe>& a_pipes, Attachments& a_attachments,
-                InputCubeTexture& a_cubemap, std::unordered_map<std::string, Mesh>& a_meshes) 
+                InputCubeTexture& a_cubemap, std::unordered_map<std::string, Mesh>& a_meshes,
+                std::unordered_map<std::string, ParticleSystem>& a_systems) 
         {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1095,9 +1165,10 @@ class Application
             if (vkBeginCommandBuffer(a_cmdBuffer, &beginInfo) != VK_SUCCESS) 
                 throw std::runtime_error("[CreateCommandPoolAndBuffers]: failed to begin recording command buffer!");
 
+            SetViewportAndScissor(a_cmdBuffer, (float)CUBE_SIDE, (float)CUBE_SIDE, true);
+
             for (uint32_t face{}; face < 6; ++face)
             {
-                SetViewportAndScissor(a_cmdBuffer, (float)CUBE_SIDE, (float)CUBE_SIDE, true);
                 RecordCommandsToRenderForCubemapFace(a_offscreenFrameBuffers.shadowCubemapFrameBuffer, a_renderPasses.shadowCubemapPass,
                         a_pipes["shadow cubemap"], face, a_cmdBuffer, a_objects);
                 RecordCommandsOfCopyingToCubemapFace(face, a_cmdBuffer, a_attachments.offscreenColor, a_cubemap.shadowCubemap);
@@ -1131,12 +1202,21 @@ class Application
             else
             {
                 RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuffer, nullptr, Camera(), a_cubemap);
+                RecordCommandsOfDrawingParticleSystems(a_systems, a_cmdBuffer, a_pipes);
             }
 
             vkCmdEndRenderPass(a_cmdBuffer);
 
             if (vkEndCommandBuffer(a_cmdBuffer) != VK_SUCCESS) {
                 throw std::runtime_error("failed to record command buffer!");
+            }
+        }
+
+        static void UpdateParticleSystems(std::unordered_map<std::string, ParticleSystem>& a_particleSystems, glm::vec3 a_emmiterPos)
+        {
+            for (auto& ps : a_particleSystems)
+            {
+                ps.second.updateParticles(s_timer.getTime(), a_emmiterPos);
             }
         }
 
@@ -1383,7 +1463,8 @@ class Application
             }
 
             RecordDrawingBuffer(m_device, m_screen.swapChainFramebuffers[imageIndex], m_framebuffersOffscreen, m_screen.swapChainExtent,
-                    m_renderPasses, m_renerables, m_drawCommandBuffers[imageIndex], m_pipes, m_attachments, m_shadowCubemap, m_meshes);
+                    m_renderPasses, m_renerables, m_drawCommandBuffers[imageIndex], m_pipes, m_attachments, m_shadowCubemap, m_meshes,
+                    m_particleSystems);
 
             VkSemaphore      waitSemaphores[]{ m_sync.imageAvailableSemaphores[m_currentFrame] };
             VkPipelineStageFlags waitStages[]{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -1495,6 +1576,11 @@ class Application
             for (auto tex : m_textures)
             {
                 tex.second.cleanup();
+            }
+
+            for (auto ps : m_particleSystems)
+            {
+                ps.second.cleanup(m_device);
             }
 
             m_shadowCubemapTexture.cleanup();
