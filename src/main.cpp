@@ -267,8 +267,6 @@ class Application
             loadMesh("fireleviathan");
             loadMesh("surface");
             loadMesh("cube");
-            loadMesh("dogeeye");
-            loadMesh("doge");
             loadMesh("lion");
 
             // This mesh is not from a file!
@@ -343,9 +341,7 @@ class Application
 
             loadTexture("fireleviathan");
             loadTexture("white");
-            loadTexture("troll");
-            loadTexture("dogeeye");
-            loadTexture("doge");
+            loadTexture("bricks");
             loadTexture("fire");
             loadTexture("lion");
         }
@@ -392,21 +388,16 @@ class Application
             // object / mesh / pipeline / texture
 
             createRenderable("fireleviathan", "fireleviathan", "scene", "fireleviathan");
-            //createRenderable("dogeeye", "dogeeye", "scene", "dogeeye");
-            //createRenderable("doge", "doge", "scene", "doge");
             createRenderable("surface", "surface", "scene", "white");
-            createRenderable("small cube", "cube", "scene", "troll");
+            createRenderable("small cube", "cube", "scene", "bricks");
             a_renerables["small cube"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(-6.5f, 0.5f, 0.5f));
             a_renerables["small cube"].matrix = glm::scale(a_renerables["small cube"].matrix, glm::vec3(1.0f, 4.0f, 7.0f));
 
-            createRenderable("lion", "lion", "scene", "lion");
+            createRenderable("lion", "lion", "scene", "white");
             a_renerables["lion"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -2.5f, 0.0f));
             a_renerables["lion"].matrix = glm::scale(a_renerables["lion"].matrix, glm::vec3(0.1f));
             a_renerables["lion"].matrix = glm::rotate(a_renerables["lion"].matrix, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
             a_renerables["lion"].matrix = glm::rotate(a_renerables["lion"].matrix, glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-
-            //createRenderable("cube", "cube", "scene", "troll");
-            //a_renerables["cube"].matrix = glm::scale(glm::mat4(1.0f), glm::vec3(50.0f));
         }
 
         static void UpdateScene(std::unordered_map<std::string, RenderObject>& a_renerables, float a_time)
@@ -417,25 +408,12 @@ class Application
             {
                 glm::mat4 m{1.0f};
 
+                m = glm::scale(m, glm::vec3(0.5));
                 m = glm::scale(m, glm::vec3(1.0f, 0.7f + 0.1 * (float)sin(a_time), 1.0f));
-                m = glm::translate(m, glm::vec3(0.0f, 12.0f, 0.0f));
-                m = glm::scale(m, glm::vec3(0.0f));
-                //m = glm::translate(m, translation);
-                //m = glm::rotate(m, glm::radians(30.0f * (float)sin(s_timer.getTime())), glm::vec3(0, 1, 0));
-
-                a_renerables["fireleviathan"].matrix = m;
-            }
-
-            if (0)
-            {
-                glm::mat4 m{1.0f};
-
-                m = glm::scale(m, glm::vec3(0.5f));
-                m = glm::translate(m, glm::vec3(4.0f, 10.0f, 4.0f));
+                m = glm::translate(m, glm::vec3(9.0f, 12.0f, -5.0f));
                 m = glm::rotate(m, glm::radians(30.0f * (float)sin(a_time)), glm::vec3(0, 1, 0));
 
-                a_renerables["doge"].matrix = m;
-                a_renerables["dogeeye"].matrix = m;
+                a_renerables["fireleviathan"].matrix = m;
             }
         }
 
@@ -1572,6 +1550,11 @@ class Application
 
             vkDestroyRenderPass(m_device, m_renderPasses.finalRenderPass, nullptr);
             vkDestroyRenderPass(m_device, m_renderPasses.shadowCubemapPass, nullptr);
+
+            for (auto& eyePtr : m_pEyes)
+            {
+                free(eyePtr.second);
+            }
 
             if (enableValidationLayers)
             {

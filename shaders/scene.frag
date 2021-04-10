@@ -17,7 +17,7 @@ layout(set = 1, binding = 0) uniform samplerCube shadowCubemap;
 
 const float eps      = 0.15f;
 const float shadow   = 0.5f;
-const float pcfDelta = 0.05f;
+const float pcfDelta = 0.03f;
 
 float PCF(vec3 a_toLight)
 {
@@ -51,9 +51,9 @@ void main()
 {
     vec3 toLight = vInput.worldLight -vInput.worldModel;
 
-    vec4 diffuse = vec4(1.0f) * dot(vInput.normal, normalize(toLight));
+    vec4 diffuse = vec4(1.0f) * max(dot(vInput.normal, normalize(toLight)), 0.0f);
 
-    color = vec4(0.15f, 0.05f, 0.01f, 0.0f) + diffuse * texture(texSampler, vInput.uv);
+    color = vec4(0.1f) + diffuse * texture(texSampler, vInput.uv);
 
     color.rgb *= PCF(toLight);
 }

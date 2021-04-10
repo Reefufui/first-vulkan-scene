@@ -63,7 +63,7 @@ class Camera : public Eye
 
         glm::vec3 position()
         {
-            glm::vec3 pos{ glm::vec3(3.5f) };
+            glm::vec3 pos{ glm::vec3(5.5f) };
 
             return pos;
         }
@@ -75,7 +75,7 @@ class Camera : public Eye
 
             glm::mat4 view = glm::lookAt(
                     position(),
-                    glm::vec3(0.0f, 2.0f, 0.0f),
+                    glm::vec3(2.0f, 1.5f, 0.0f),
                     glm::vec3(0.f, 1.f, 0.f)
                     );
 
@@ -101,7 +101,7 @@ class Light : public Eye
 
         glm::vec3 position()
         {
-            glm::vec3 pos = glm::vec3(5.0f * (float)sin(this->getTime()), 2.0f, 5.0f * (float)cos(this->getTime()));
+            glm::vec3 pos = glm::vec3(4.5f * (float)sin(this->getTime() / 2.0f), 4.5f, 4.5f * (float)cos(this->getTime() / 2.0f));
 
             return pos;
         }
