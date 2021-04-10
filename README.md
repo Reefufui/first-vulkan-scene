@@ -1,6 +1,8 @@
-# vulkan_graphics_step1
+Implemented (29 points):
 
-Please none that this sample in fact contains 2 samples: 
+База
+Карта теней
+PCF
+Тени от источника во все стороны (при помощи кубических текстурных карт)
+Реализация источника света в виде системы частиц (огонь)
 
-* The 'master' branch with rendering to window using glfw
-* The 'offscreen' that render triangle to texture and save it to image

@@ -30,5 +30,5 @@ void main()
     vOut.rotation = vRotation;
 
     gl_Position = PushConstants.projection * PushConstants.view * PushConstants.model * vPosition;
-    gl_PointSize = 2.0f * vSize;
+    gl_PointSize = 3.0f * vSize;
 }

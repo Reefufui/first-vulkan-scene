@@ -17,7 +17,7 @@ layout(set = 1, binding = 0) uniform samplerCube shadowCubemap;
 
 const float eps      = 0.15f;
 const float shadow   = 0.5f;
-const float pcfDelta = 0.05f;
+const float pcfDelta = 0.03f;
 
 float PCF(vec3 a_toLight)
 {

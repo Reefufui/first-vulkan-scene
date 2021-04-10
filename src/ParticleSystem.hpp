@@ -118,7 +118,7 @@ class ParticleSystem
             for (auto& particle : m_particles)
             {
                 particle.position += particle.velocity * timeElapsed * 0.5f;
-                particle.alpha += timeElapsed * 2.5f;
+                particle.alpha += timeElapsed * random(5.5f);
                 particle.size  -= timeElapsed * random(10.0f);
                 particle.rotation += particle.rotSpeed * timeElapsed;
 
