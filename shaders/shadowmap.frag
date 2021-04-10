@@ -1,3 +1,5 @@
+// created in 2021 by Andrey Treefonov https://github.com/Reefufui
+
 #version 450
 
 layout (location = 0) in VOUT

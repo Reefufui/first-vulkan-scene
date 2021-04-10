@@ -26,10 +26,10 @@ void main()
             samplePos = vec3(+1.0f, -uv.y, -uv.x); // -X
             break;
         case 2:
-            samplePos = vec3(uv.x, +1.0f, uv.y); // +Y
+            samplePos = vec3(uv.x, +1.0f, uv.y); // -Y
             break;
         case 3:
-            samplePos = vec3(uv.x, -1.0f, uv.y); // -Y
+            samplePos = vec3(uv.x, -1.0f, -uv.y); // +Y
             break;
         case 4:
             samplePos = vec3(uv.x, -uv.y, +1.0f); // -Z
@@ -39,11 +39,7 @@ void main()
             break;
     }
 
-    if (samplePos == vec3(0.0f))
-    {
-        color = vec4(0.0f);
-        return;
-    }
     float dist = length(texture(cubemap, samplePos).xyz) * EXPOSITION;
     color = vec4(vec3(dist), 1.0);
 }
+

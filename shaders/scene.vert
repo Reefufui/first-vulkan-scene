@@ -1,3 +1,5 @@
+// created in 2021 by Andrey Treefonov https://github.com/Reefufui
+
 #version 450
 
 layout (location = 0) in vec3 vPosition;
@@ -20,7 +22,8 @@ out gl_PerVertex
 layout( push_constant ) uniform constants
 {
     mat4 model;
-    mat4 vp; // projection * view
+    mat4 view;
+    mat4 projection;
     vec3 lightPos;
 } PushConstants;
 
@@ -31,9 +34,11 @@ void main()
     vOut.uv         = vUVCoord;
     vOut.worldLight = PushConstants.lightPos;
     vOut.worldModel = worldPosition.xyz;
-    vOut.normal     = vec4(PushConstants.vp * worldPosition * vec4(vNormal, 1.0f)).xyz;
+
+    mat3 normalMatrix = transpose(inverse(mat3(PushConstants.model)));
+    vOut.normal       = normalize(normalMatrix * vNormal);
 
     // camera POV
-    gl_Position = PushConstants.vp * worldPosition;
+    gl_Position = PushConstants.projection * PushConstants.view * worldPosition;
 }
 

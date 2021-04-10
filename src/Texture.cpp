@@ -30,8 +30,6 @@ void Texture::loadFromPNG(const char* a_filename)
     rgba = new unsigned char[m_size];
     memcpy(rgba, pixels, m_size);
 
-    std::cout << (int)rgba[4] << " " << a_filename << "\n";
-
     stbi_image_free(pixels);
 }
 
@@ -74,9 +72,9 @@ void Texture::create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a_usa
             samplerInfo.magFilter    = VK_FILTER_LINEAR;
             samplerInfo.minFilter    = VK_FILTER_LINEAR;
             samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             samplerInfo.mipLodBias   = 0.0f;
             samplerInfo.compareOp    = VK_COMPARE_OP_NEVER;
             samplerInfo.minLod           = 0;
