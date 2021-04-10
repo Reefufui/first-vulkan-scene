@@ -1,3 +1,5 @@
+// created in 2021 by Andrey Treefonov https://github.com/Reefufui
+
 #version 450
 
 layout(location = 0) in vec4  vPosition;
@@ -16,8 +18,9 @@ layout (location = 0) out VOUT
 layout( push_constant ) uniform constants
 {
     mat4 model;
-    mat4 vp; // projection * view
-    vec3 lightPos;
+    mat4 view;
+    mat4 projection;
+    vec3 dummy;
 } PushConstants;
 
 void main()
@@ -26,6 +29,6 @@ void main()
     vOut.alpha    = vAlpha;
     vOut.rotation = vRotation;
 
-    gl_Position = PushConstants.vp * PushConstants.model * vPosition;
-    gl_PointSize = vSize;
+    gl_Position = PushConstants.projection * PushConstants.view * PushConstants.model * vPosition;
+    gl_PointSize = 5.0f * vSize;
 }

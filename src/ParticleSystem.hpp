@@ -45,6 +45,7 @@ class ParticleSystem
         float    m_flameRadius{0.5f};
 
         InputTexture* m_pAttachedTexture{};
+        Timer*        m_pTimer{};
 
         float random(float a_range)
         {
@@ -74,11 +75,11 @@ class ParticleSystem
 
     public:
 
-        ParticleSystem()
+        void setTimer(Timer* a_timer)
         {
-            Timer timer{};
-            timer.timeStamp();
-            m_randomEngine.seed(timer.getTime());
+            m_pTimer = a_timer;
+            m_pTimer->timeStamp();
+            m_randomEngine.seed(m_pTimer->getTime());
         }
 
         VkBuffer&       getVBO() { return m_vbo; };
@@ -107,12 +108,12 @@ class ParticleSystem
             }
         }
 
-        void updateParticles(float a_time, glm::vec3 a_emmiterPos)
+        void updateParticles(glm::vec3 a_emmiterPos)
         {
             m_emmiterPos = a_emmiterPos + glm::vec3(0.0f, m_flameRadius / 3.0f, 0.0f);
 
             static float previousTime{};
-            float timeElapsed = a_time - previousTime;
+            float timeElapsed = m_pTimer->getTime() - previousTime;
 
             for (auto& particle : m_particles)
             {
@@ -127,7 +128,7 @@ class ParticleSystem
                 }
             }
 
-            previousTime = a_time;
+            previousTime += timeElapsed;
 
             memcpy(m_mappedMemory, m_particles.data(), m_vboSize);
         }

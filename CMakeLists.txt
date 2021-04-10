@@ -35,6 +35,7 @@ add_executable(vulkan_shadow_map
     src/Mesh.cpp
     src/Texture.cpp
     src/Texture.hpp
+    src/Eye.hpp
     src/ParticleSystem.hpp
     src/vendor/stb_image/stb_image.cpp
     )
@@ -42,3 +43,4 @@ add_executable(vulkan_shadow_map
 set_target_properties(vulkan_shadow_map PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
 target_link_libraries(vulkan_shadow_map ${ALL_LIBS} ${GLFW_LIBRARIES} glfw)
+

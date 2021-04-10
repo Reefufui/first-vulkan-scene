@@ -30,10 +30,7 @@
 #include "Texture.hpp"
 #include "ParticleSystem.hpp"
 #include "Timer.hpp"
-
-const int WIDTH     = 800;
-const int HEIGHT    = 600;
-const int CUBE_SIDE = 1000;
+#include "Eye.hpp"
 
 const int MAX_FRAMES_IN_FLIGHT = 3;
 
@@ -53,8 +50,9 @@ class Application
 
         GLFWwindow* m_window;
 
-        static Timer s_timer;
         static bool  s_shadowmapDebug;
+
+        Timer m_timer;
 
         VkInstance m_instance;
         std::vector<const char*> m_enabledLayers;
@@ -127,6 +125,7 @@ class Application
         std::unordered_map<std::string, InputTexture>   m_inputTextures;
         std::unordered_map<std::string, RenderObject>   m_renerables;
         std::unordered_map<std::string, ParticleSystem> m_particleSystems;
+        std::unordered_map<std::string, Eye*>           m_pEyes;
 
         static VKAPI_ATTR VkBool32 VKAPI_CALL debugReportCallbackFn(
                 VkDebugReportFlagsEXT                       flags,
@@ -161,10 +160,12 @@ class Application
         }
 
         static void CreateParticleSystem(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
-                std::unordered_map<std::string, ParticleSystem>& a_particleSystems, std::unordered_map<std::string, InputTexture>& a_IT)
+                std::unordered_map<std::string, ParticleSystem>& a_particleSystems, std::unordered_map<std::string, InputTexture>& a_IT,
+                Timer* a_timer)
         {
             ParticleSystem fire{};
 
+            fire.setTimer(a_timer);
             fire.initParticles(glm::vec3(0.0f, 2.0f, 0.0f), 700);
 
             CreateHostVisibleBuffer(a_device, a_physDevice, fire.getSize(), &(fire.getVBO()), &(fire.getVBOMemory()),
@@ -268,6 +269,7 @@ class Application
             loadMesh("cube");
             loadMesh("dogeeye");
             loadMesh("doge");
+            loadMesh("lion");
 
             // This mesh is not from a file!
             LoadDebugSquareMesh(a_device, a_physDevice, a_pool, a_queue, a_meshes);
@@ -345,6 +347,7 @@ class Application
             loadTexture("dogeeye");
             loadTexture("doge");
             loadTexture("fire");
+            loadTexture("lion");
         }
 
 
@@ -388,29 +391,48 @@ class Application
 
             // object / mesh / pipeline / texture
 
-            //createRenderable("fireleviathan", "fireleviathan", "scene", "fireleviathan");
-            createRenderable("dogeeye", "dogeeye", "scene", "dogeeye");
-            createRenderable("doge", "doge", "scene", "doge");
+            createRenderable("fireleviathan", "fireleviathan", "scene", "fireleviathan");
+            //createRenderable("dogeeye", "dogeeye", "scene", "dogeeye");
+            //createRenderable("doge", "doge", "scene", "doge");
             createRenderable("surface", "surface", "scene", "white");
             createRenderable("small cube", "cube", "scene", "troll");
             a_renerables["small cube"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(-6.5f, 0.5f, 0.5f));
+            a_renerables["small cube"].matrix = glm::scale(a_renerables["small cube"].matrix, glm::vec3(1.0f, 4.0f, 7.0f));
+
+            createRenderable("lion", "lion", "scene", "lion");
+            a_renerables["lion"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -2.5f, 0.0f));
+            a_renerables["lion"].matrix = glm::scale(a_renerables["lion"].matrix, glm::vec3(0.1f));
+            a_renerables["lion"].matrix = glm::rotate(a_renerables["lion"].matrix, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+            a_renerables["lion"].matrix = glm::rotate(a_renerables["lion"].matrix, glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
             //createRenderable("cube", "cube", "scene", "troll");
             //a_renerables["cube"].matrix = glm::scale(glm::mat4(1.0f), glm::vec3(50.0f));
         }
 
-        static void UpdateScene(std::unordered_map<std::string, RenderObject>& a_renerables)
+        static void UpdateScene(std::unordered_map<std::string, RenderObject>& a_renerables, float a_time)
         {
             float radius{ 3.0f };
-            glm::vec3 translation = glm::vec3(radius * (float)sin(s_timer.getTime()), 2.0f, radius * (float)cos(s_timer.getTime()));
+            glm::vec3 translation = glm::vec3(radius * (float)sin(a_time), 2.0f, radius * (float)cos(a_time));
 
             {
                 glm::mat4 m{1.0f};
 
-                m = glm::scale(m, glm::vec3(1.0f, 1.0f + 0.1 * (float)sin(s_timer.getTime()), 1.0f));
-                m = glm::translate(m, glm::vec3(0.0f, 2.0f, 0.0f));
+                m = glm::scale(m, glm::vec3(1.0f, 0.7f + 0.1 * (float)sin(a_time), 1.0f));
+                m = glm::translate(m, glm::vec3(0.0f, 12.0f, 0.0f));
+                m = glm::scale(m, glm::vec3(0.0f));
                 //m = glm::translate(m, translation);
                 //m = glm::rotate(m, glm::radians(30.0f * (float)sin(s_timer.getTime())), glm::vec3(0, 1, 0));
+
+                a_renerables["fireleviathan"].matrix = m;
+            }
+
+            if (0)
+            {
+                glm::mat4 m{1.0f};
+
+                m = glm::scale(m, glm::vec3(0.5f));
+                m = glm::translate(m, glm::vec3(4.0f, 10.0f, 4.0f));
+                m = glm::rotate(m, glm::radians(30.0f * (float)sin(a_time)), glm::vec3(0, 1, 0));
 
                 a_renerables["doge"].matrix = m;
                 a_renerables["dogeeye"].matrix = m;
@@ -441,14 +463,19 @@ class Application
             CreateShadowCubemapRenderPass(m_device, &(m_renderPasses.shadowCubemapPass));
 
             std::cout << "\tcreating frame buffers...\n";
-            CreateScreenFrameBuffers(      m_device, m_renderPasses.finalRenderPass,   &m_screen,                                        m_attachments);
-            CreateShadowCubemapFrameBuffer(m_device, m_renderPasses.shadowCubemapPass, m_framebuffersOffscreen.shadowCubemapFrameBuffer, m_attachments);
+            CreateScreenFrameBuffers(m_device, m_renderPasses.finalRenderPass, &m_screen, m_attachments);
+            CreateShadowCubemapFrameBuffer(m_device, m_renderPasses.shadowCubemapPass,
+                    m_framebuffersOffscreen.shadowCubemapFrameBuffer, m_attachments);
+
+            std::cout << "\tcreating frame buffers...\n";
+            CreateEyes(m_pEyes, &m_timer);
 
             std::cout << "\tcreating graphics pipelines...\n";
             CreateGraphicsPipelines(m_device, m_screen.swapChainExtent, m_renderPasses, m_pipes, m_DSLayouts);
 
             std::cout << "\tcreating particle systems...\n";
-            CreateParticleSystem(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_particleSystems, m_inputTextures);
+            CreateParticleSystem(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_particleSystems, m_inputTextures,
+                    &m_timer);
 
             std::cout << "\tcomposing scene...\n";
             ComposeScene(m_renerables, m_pipes, m_meshes, m_inputTextures);
@@ -463,9 +490,9 @@ class Application
             while (!glfwWindowShouldClose(m_window)) 
             {
                 glfwPollEvents();
-                s_timer.timeStamp();
-                UpdateScene(m_renerables);
-                UpdateParticleSystems(m_particleSystems, LightPos());
+                m_timer.timeStamp();
+                UpdateScene(m_renerables, m_timer.getTime());
+                UpdateParticleSystems(m_particleSystems, m_pEyes["light"]->position());
                 DrawFrame();
             }
 
@@ -867,6 +894,15 @@ class Application
             createPipeline("particle system", particleSystemDSLayout, "particle", a_renderPasses.finalRenderPass);
         }
 
+        static void CreateEyes(std::unordered_map<std::string, Eye*>& a_eyes, Timer* a_pTimer)
+        {
+            Camera* camera = new Camera{a_pTimer};
+            a_eyes["camera"] = camera;
+
+            Light* light = new Light{a_pTimer};
+            a_eyes["light"] = light;
+        }
+
         static void CreateScreenFrameBuffers(VkDevice a_device, VkRenderPass a_renderPass, vk_utils::ScreenBufferResources* pScreen,
                 Attachments& a_attachments)
         {
@@ -913,67 +949,6 @@ class Application
                 throw std::runtime_error("failed to create framebuffer!");
         }
 
-        static glm::mat4 Camera()
-        {
-            glm::vec3 cameraPos{ glm::vec3(4.0f) };
-
-            glm::mat4 view = glm::lookAt(
-                    cameraPos,                      //eye (cam position)
-                    glm::vec3(0.0f, 0.0f, 0.0f),    //center (where we are looking)
-                    glm::vec3(0.f, 1.f, 0.f)        //up (worlds upwards direction)
-                    );
-
-            glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)WIDTH / (float)HEIGHT, 0.001f, 70.0f);
-
-            return projection * view;
-        }
-
-        static glm::vec3 LightPos()
-        {
-            glm::vec3 pos = glm::vec3(5.0f * (float)sin(s_timer.getTime() / 3.0f), 2.0f, 5.0f * (float)cos(s_timer.getTime() / 3.0f));
-            //glm::vec3 pos = glm::vec3(-3.0f, 2.0f, -3.0f);
-            return pos;
-        }
-
-        static glm::mat4 light(uint32_t a_face)
-        {
-            // lookAt matrix doesnt suit as soon as we cant look directly up/down with it
-            // implenented using basic glm functionality
-
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), -LightPos());
-
-            glm::mat4 view = glm::mat4(1.0f);
-            switch (a_face)
-            {
-                case 0: // +X
-                    view = glm::rotate(view, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-                    break;
-                case 1: // -X
-                    view = glm::rotate(view, glm::radians(-90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-                    break;
-                case 2: // -Y
-                    view = glm::rotate(view, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-                    break;
-                case 3: // +Y
-                    view = glm::rotate(view, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-                    break;
-                case 4: // +Z
-                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-                    break;
-                case 5: // -Z
-                    view = glm::rotate(view, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-                    break;
-            }
-
-            glm::mat4 projection = glm::perspective(glm::radians(90.f), 1.0f, 0.001f, (float)CUBE_SIDE);
-
-            return projection * view * model;
-        }
-
         static void RecordCommandsOfShowingCubemap(VkDevice a_device, Mesh a_squareMesh, VkCommandBuffer a_cmdBuffer, const Pipe* a_cubemapPipe,
                 InputCubeTexture a_cubeTexture)
         {
@@ -994,7 +969,7 @@ class Application
         }
 
         static void RecordCommandsOfDrawingParticleSystems(std::unordered_map<std::string, ParticleSystem> a_particleSystems, VkCommandBuffer a_cmdBuffer,
-                std::unordered_map<std::string, Pipe>& a_pipes)
+                std::unordered_map<std::string, Pipe>& a_pipes, Eye* a_eye)
         {
             VkPipeline&       pipeline = a_pipes["particle system"].pipeline;
             VkPipelineLayout& layout   = a_pipes["particle system"].pipelineLayout;
@@ -1008,9 +983,9 @@ class Application
                 vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &(system.getTexture()->descriptorSet), 0, nullptr);
 
                 PushConstants constants{};
-                constants.model    = glm::mat4(1.0f);
-                constants.vp       = Camera();
-                constants.lightPos = LightPos();
+                constants.model      = glm::mat4(1.0f);
+                constants.view       = a_eye->view(0);
+                constants.projection = a_eye->projection();
 
                 vkCmdPushConstants(a_cmdBuffer, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &constants);
 
@@ -1022,7 +997,7 @@ class Application
         }
 
         static void RecordCommandsOfDrawingRenderables(std::unordered_map<std::string, RenderObject> a_objects, VkCommandBuffer a_cmdBuffer,
-                const Pipe* a_specialPipeline, glm::mat4 a_vpMatrix, InputCubeTexture a_shadowCubemap)
+                const Pipe* a_specialPipeline, Eye* a_eye, glm::vec3 a_lightPos, InputCubeTexture a_shadowCubemap, uint32_t a_face)
         {
             bool  specialPipeline{ a_specialPipeline != nullptr };
             Mesh* previousMesh{nullptr};
@@ -1059,9 +1034,10 @@ class Application
                 }
 
                 PushConstants constants{};
-                constants.model    = obj.matrix;
-                constants.vp       = a_vpMatrix;
-                constants.lightPos = LightPos();
+                constants.model      = obj.matrix;
+                constants.view       = a_eye->view(a_face);
+                constants.projection = a_eye->projection();
+                constants.lightPos   = a_lightPos;
 
                 vkCmdPushConstants(a_cmdBuffer, pLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &constants);
 
@@ -1080,7 +1056,8 @@ class Application
         }
 
         static void RecordCommandsToRenderForCubemapFace(VkFramebuffer a_frameBuffer, VkRenderPass a_renderPass, Pipe a_pipe,
-                const uint32_t a_face, VkCommandBuffer a_cmdBuff, const std::unordered_map<std::string, RenderObject>& a_objects)
+                const uint32_t a_face, VkCommandBuffer a_cmdBuff, const std::unordered_map<std::string, RenderObject>& a_objects,
+                Eye* a_light)
         {
             std::vector<VkClearValue> clearValues(2);
             clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
@@ -1097,7 +1074,8 @@ class Application
 
             vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, light(a_face), InputCubeTexture{});
+            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, a_light, a_light->position(), InputCubeTexture{},
+                    a_face);
 
             vkCmdEndRenderPass(a_cmdBuff);
         }
@@ -1152,11 +1130,7 @@ class Application
             vkCmdSetScissor(a_cmdBuffer, 0, 1, &scissor);
         }
 
-        static void RecordDrawingBuffer(VkDevice a_device, VkFramebuffer a_swapChainFramebuffer, FramebuffersOffscreen a_offscreenFrameBuffers,
-                VkExtent2D a_frameBufferExtent, RenderPasses a_renderPasses, std::unordered_map<std::string, RenderObject>& a_objects,
-                VkCommandBuffer a_cmdBuffer, std::unordered_map<std::string, Pipe>& a_pipes, Attachments& a_attachments,
-                InputCubeTexture& a_cubemap, std::unordered_map<std::string, Mesh>& a_meshes,
-                std::unordered_map<std::string, ParticleSystem>& a_systems) 
+        void RecordDrawingBuffer(VkFramebuffer a_swapChainFramebuffer, VkCommandBuffer a_cmdBuffer)
         {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1169,14 +1143,13 @@ class Application
 
             for (uint32_t face{}; face < 6; ++face)
             {
-                RecordCommandsToRenderForCubemapFace(a_offscreenFrameBuffers.shadowCubemapFrameBuffer, a_renderPasses.shadowCubemapPass,
-                        a_pipes["shadow cubemap"], face, a_cmdBuffer, a_objects);
-                RecordCommandsOfCopyingToCubemapFace(face, a_cmdBuffer, a_attachments.offscreenColor, a_cubemap.shadowCubemap);
+                RecordCommandsToRenderForCubemapFace(m_framebuffersOffscreen.shadowCubemapFrameBuffer, m_renderPasses.shadowCubemapPass,
+                        m_pipes["shadow cubemap"], face, a_cmdBuffer, m_renerables, m_pEyes["light"]);
+                RecordCommandsOfCopyingToCubemapFace(face, a_cmdBuffer, m_attachments.offscreenColor, m_shadowCubemap.shadowCubemap);
             }
 
             VkClearValue colorClear;
-            //colorClear.color = { {  1.0f, 0.7f, 0.6f, 1.0f } };
-            colorClear.color = { {  0.0f, 0.0f, 0.0f, 1.0f } };
+            colorClear.color = { {  0.2f, 0.2f, 0.2f, 1.0f } };
 
             VkClearValue depthClear;
             depthClear.depthStencil.depth = 1.f;
@@ -1185,10 +1158,10 @@ class Application
 
             VkRenderPassBeginInfo renderPassInfo{};
             renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            renderPassInfo.renderPass        = a_renderPasses.finalRenderPass;
+            renderPassInfo.renderPass        = m_renderPasses.finalRenderPass;
             renderPassInfo.framebuffer       = a_swapChainFramebuffer;
             renderPassInfo.renderArea.offset = { 0, 0 };
-            renderPassInfo.renderArea.extent = a_frameBufferExtent;
+            renderPassInfo.renderArea.extent = m_screen.swapChainExtent;
             renderPassInfo.clearValueCount   = clearValues.size();
             renderPassInfo.pClearValues      = clearValues.data();
 
@@ -1197,12 +1170,13 @@ class Application
 
             if (s_shadowmapDebug)
             {
-                RecordCommandsOfShowingCubemap(a_device, a_meshes["debug square"], a_cmdBuffer, &a_pipes["show cubemap"], a_cubemap);
+                RecordCommandsOfShowingCubemap(m_device, m_meshes["debug square"], a_cmdBuffer, &m_pipes["show cubemap"], m_shadowCubemap);
             }
             else
             {
-                RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuffer, nullptr, Camera(), a_cubemap);
-                RecordCommandsOfDrawingParticleSystems(a_systems, a_cmdBuffer, a_pipes);
+                RecordCommandsOfDrawingRenderables(m_renerables, a_cmdBuffer, nullptr, m_pEyes["camera"], m_pEyes["light"]->position(),
+                        m_shadowCubemap, 0);
+                RecordCommandsOfDrawingParticleSystems(m_particleSystems, a_cmdBuffer, m_pipes, m_pEyes["camera"]);
             }
 
             vkCmdEndRenderPass(a_cmdBuffer);
@@ -1216,7 +1190,7 @@ class Application
         {
             for (auto& ps : a_particleSystems)
             {
-                ps.second.updateParticles(s_timer.getTime(), a_emmiterPos);
+                ps.second.updateParticles(a_emmiterPos);
             }
         }
 
@@ -1462,9 +1436,7 @@ class Application
                 throw std::runtime_error("[DrawFrame]: failed to reset command buffer!");
             }
 
-            RecordDrawingBuffer(m_device, m_screen.swapChainFramebuffers[imageIndex], m_framebuffersOffscreen, m_screen.swapChainExtent,
-                    m_renderPasses, m_renerables, m_drawCommandBuffers[imageIndex], m_pipes, m_attachments, m_shadowCubemap, m_meshes,
-                    m_particleSystems);
+            RecordDrawingBuffer(m_screen.swapChainFramebuffers[imageIndex], m_drawCommandBuffers[imageIndex]);
 
             VkSemaphore      waitSemaphores[]{ m_sync.imageAvailableSemaphores[m_currentFrame] };
             VkPipelineStageFlags waitStages[]{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -1647,8 +1619,7 @@ class Application
         }
 };
 
-Timer Application::s_timer;
-bool  Application::s_shadowmapDebug;     // "2" binding (normal mode - "1")
+bool  Application::s_shadowmapDebug; // "2" binding (normal mode - "1")
 
 int main() 
 {
