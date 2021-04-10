@@ -101,7 +101,7 @@ class Light : public Eye
 
         glm::vec3 position()
         {
-            glm::vec3 pos = glm::vec3(5.0f * (float)sin(this->getTime()), 2.0f, 5.0f * (float)cos(this->getTime()));
+            glm::vec3 pos = glm::vec3(5.0f * (float)sin(this->getTime() / 2.0f), 2.0f, 5.0f * (float)cos(this->getTime() / 2.0f));
 
             return pos;
         }

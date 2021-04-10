@@ -1573,6 +1573,11 @@ class Application
             vkDestroyRenderPass(m_device, m_renderPasses.finalRenderPass, nullptr);
             vkDestroyRenderPass(m_device, m_renderPasses.shadowCubemapPass, nullptr);
 
+            for (auto& eyePtr : m_pEyes)
+            {
+                free(eyePtr.second);
+            }
+
             if (enableValidationLayers)
             {
                 // destroy callback.
