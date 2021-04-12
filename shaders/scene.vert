@@ -35,6 +35,7 @@ void main()
     vOut.worldLight = PushConstants.lightPos;
     vOut.worldModel = worldPosition.xyz;
 
+    // our toLight vector is in world space coords (normal should be in world space coords too)
     mat3 normalMatrix = transpose(inverse(mat3(PushConstants.model)));
     vOut.normal       = normalize(normalMatrix * vNormal);
 

@@ -13,13 +13,6 @@ struct VertexInputDescription {
     VkPipelineVertexInputStateCreateFlags          flags{};
 };
 
-struct PushConstants {
-    glm::mat4 model;
-    glm::mat4 view;
-    glm::mat4 projection;
-    glm::vec3 lightPos;
-};
-
 struct Vertex {
     glm::vec3 position{};
     glm::vec3 normal{};

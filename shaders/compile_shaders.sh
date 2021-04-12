@@ -7,3 +7,7 @@ glslangValidator -V showcubemap.vert -o showcubemap.vert.spv
 glslangValidator -V showcubemap.frag -o showcubemap.frag.spv
 glslangValidator -V particle.frag -o particle.frag.spv
 glslangValidator -V particle.vert -o particle.vert.spv
+glslangValidator -V gbuffer.frag -o gbuffer.frag.spv
+glslangValidator -V gbuffer.vert -o gbuffer.vert.spv
+glslangValidator -V ssao.frag -o ssao.frag.spv
+glslangValidator -V ssao.vert -o ssao.vert.spv
