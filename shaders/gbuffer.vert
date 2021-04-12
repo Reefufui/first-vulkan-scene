@@ -28,6 +28,6 @@ void main()
     mat3 normalMatrix = transpose(inverse(mat3(PushConstants.view * PushConstants.model)));
 
     vOut.normal       = normalMatrix * vNormal;
-    vOut.position     = vec3(PushConstants.view * PushConstants.model * vec4(vPosition, 1.0f));
+    vOut.position     = vec4(PushConstants.view * PushConstants.model * vec4(vPosition, 1.0f)).xyz;
     vOut.uv           = vUVCoord;
 }

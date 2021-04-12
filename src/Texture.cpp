@@ -82,7 +82,6 @@ void Texture::create(VkDevice a_device, VkPhysicalDevice a_physDevice, int a_usa
             samplerInfo.maxAnisotropy    = 1.0;
             samplerInfo.anisotropyEnable = VK_FALSE;
             samplerInfo.borderColor      = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
-            samplerInfo.unnormalizedCoordinates = VK_FALSE;
         }
 
         VK_CHECK_RESULT(vkCreateSampler(a_device, &samplerInfo, nullptr, &m_imageSampler));

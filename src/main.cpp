@@ -457,7 +457,7 @@ class Application
             createRenderable("fireleviathan", "fireleviathan", "scene", "fireleviathan");
             createRenderable("surface", "surface", "scene", "white");
             createRenderable("small cube", "cube", "scene", "bricks");
-            a_renerables["small cube"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(-6.5f, 0.5f, 0.5f));
+            a_renerables["small cube"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(-6.5f, 0.3f, 0.5f));
             a_renerables["small cube"].matrix = glm::scale(a_renerables["small cube"].matrix, glm::vec3(1.0f, 4.0f, 7.0f));
 
             createRenderable("lion", "lion", "scene", "white");
@@ -622,8 +622,8 @@ class Application
             std::vector<VkAttachmentDescription> attachmentDescr(4);
 
             attachmentDescr[0].format = VK_FORMAT_R32G32B32A32_SFLOAT; // vec3(position)float(depth)
-            attachmentDescr[1].format = VK_FORMAT_R8G8B8A8_UNORM;      // vec3(normals)
-            attachmentDescr[2].format = VK_FORMAT_R8G8B8A8_UNORM;      // vec3(color)
+            attachmentDescr[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;      // vec3(normals)
+            attachmentDescr[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;      // vec3(color)
             attachmentDescr[3].format = VK_FORMAT_D32_SFLOAT;          // depth
 
             for (size_t i{}; i < 4; ++i)
@@ -695,7 +695,7 @@ class Application
         static void CreateSSAOBlurRenderPass(VkDevice a_device, VkRenderPass* a_pRenderPass)
         {
             VkAttachmentDescription colorAttachment{};
-            colorAttachment.format         = VK_FORMAT_R8_UNORM;
+            colorAttachment.format         = VK_FORMAT_R32_SFLOAT;
             colorAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
             colorAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
             colorAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
@@ -759,7 +759,7 @@ class Application
         static void CreateSSAORenderPass(VkDevice a_device, VkRenderPass* a_pRenderPass)
         {
             VkAttachmentDescription colorAttachment{};
-            colorAttachment.format         = VK_FORMAT_R8_UNORM;
+            colorAttachment.format         = VK_FORMAT_R32_SFLOAT;
             colorAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
             colorAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
             colorAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
@@ -953,14 +953,11 @@ class Application
             // data for ssao sampler kernel ubo
             std::vector<glm::vec4> kernel(SSAO_SAMPLING_KERNEL_SIZE);
             {
-                float scale{};
                 for (auto& sampleVector : kernel)
                 {
                     glm::vec3 vec = glm::vec3(random(2.0f) - 1.0f, random(2.0f) - 1.0f, random(1.0f));
                     vec = glm::normalize(vec) * random(1.0f);
-                    sampleVector = glm::vec4(vec * std::lerp(0.1f, 1.0f, scale * scale), 0.0f);
-
-                    scale += 1.0f / float(SSAO_SAMPLING_KERNEL_SIZE);
+                    sampleVector = glm::vec4(vec, 1.0f);
                 };
             }
 
@@ -1265,6 +1262,7 @@ class Application
             std::vector<VkDescriptorSetLayout> shadowCubemapDSLayout(0);
             createPipeline("shadow cubemap", shadowCubemapDSLayout, "shadowmap", a_renderPasses.shadowCubemapPass);
 
+            rasterizer.cullMode = VK_CULL_MODE_NONE;
             // display cubemap faces ///////////////////////////////////////////////////
             VkVertexInputBindingDescription   inputBindings{ 0, sizeof(float) * 2, VK_VERTEX_INPUT_RATE_VERTEX };
             VkVertexInputAttributeDescription attributes{ 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
@@ -1571,7 +1569,7 @@ class Application
                 InputTexture& a_noiceTexture, UniformBuffer& a_ssaoKernel, glm::mat4 a_projMatrix)
         {
             std::vector<VkClearValue> clearValues(2);
-            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
             clearValues[1].depthStencil = { 1.0f, 0 };
 
             VkRenderPassBeginInfo renderPassInfo{};
@@ -1707,9 +1705,9 @@ class Application
                 RecordCommandsOfCopyingToCubemapFace(face, a_cmdBuffer, m_attachments.offscreenColor, m_inputAttachments.shadowCubemap.shadowCubemap);
             }
 
-            SetViewportAndScissor(a_cmdBuffer, (float)WIDTH, (float)HEIGHT, true);
             // SSAO
             {
+                SetViewportAndScissor(a_cmdBuffer, (float)WIDTH, (float)HEIGHT, true);
                 RecordCommandsOfFillingGBuffer(m_framebuffersOffscreen.gBufferCreationFrameBuffer, m_renderPasses.gBufferCreationPass,
                         m_pipes["g buffer"], a_cmdBuffer, m_renerables, m_pEyes["camera"]);
                 RecordCommandsOfSSAOEvaluation(m_device, m_renderPasses.ssaoPass, m_framebuffersOffscreen.ssaoFrameBuffer, m_meshes["quad"],
@@ -1733,6 +1731,8 @@ class Application
             renderPassInfo.renderArea.extent = m_screen.swapChainExtent;
             renderPassInfo.clearValueCount   = clearValues.size();
             renderPassInfo.pClearValues      = clearValues.data();
+
+            SetViewportAndScissor(a_cmdBuffer, (float)WIDTH, (float)HEIGHT, true);
 
             vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -1873,6 +1873,7 @@ class Application
 
                 // SSAO - color attachments
                 Texture& gBufferPD = a_attachments.gPositionAndDepth;
+                gBufferPD.setAddressMode(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
                 gBufferPD.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
                 gBufferPD.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32G32B32A32_SFLOAT);
 
@@ -1881,8 +1882,9 @@ class Application
                 gBufferPD.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
                 Texture& gBufferN = a_attachments.gNormals;
+                gBufferN.setAddressMode(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
                 gBufferN.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
-                gBufferN.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM);
+                gBufferN.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32G32B32A32_SFLOAT);
 
                 imgBar = gBufferN.makeBarrier(gBufferN.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1890,7 +1892,7 @@ class Application
 
                 Texture& gBufferC = a_attachments.gColor;
                 gBufferC.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
-                gBufferC.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM);
+                gBufferC.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32G32B32A32_SFLOAT);
 
                 imgBar = gBufferC.makeBarrier(gBufferC.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1898,7 +1900,7 @@ class Application
 
                 Texture& ssao = a_attachments.ssao;
                 ssao.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
-                ssao.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_FORMAT_R8_UNORM);
+                ssao.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_FORMAT_R32_SFLOAT);
 
                 imgBar = ssao.makeBarrier(ssao.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1906,7 +1908,7 @@ class Application
 
                 Texture& blurredSSAO = a_attachments.blurredSSAO;
                 blurredSSAO.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
-                blurredSSAO.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_FORMAT_R8_UNORM);
+                blurredSSAO.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_FORMAT_R32_SFLOAT);
 
                 imgBar = blurredSSAO.makeBarrier(blurredSSAO.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
