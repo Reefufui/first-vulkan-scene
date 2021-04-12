@@ -121,6 +121,8 @@ class Application
         struct InputAttachments {
             InputTexture     gPositionAndDepth;
             InputTexture     gNormals;
+            InputTexture     ssao;
+            InputTexture     blurredSSAO;
             InputCubeTexture shadowCubemap;
         } m_inputAttachments;
 
@@ -408,7 +410,7 @@ class Application
 
                 fillTexture(texture, randomNoice.data(), randomNoice.size() * sizeof(glm::vec4));
 
-                a_textures["noice"] = texture;
+                a_textures["noise"] = texture;
 
                 randomNoice = std::vector<glm::vec4>(0);
             }
@@ -490,7 +492,7 @@ class Application
             CreateSyncObjects(m_device, &m_sync);
 
             std::cout << "\tloading assets...\n";
-            LoadTextures(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_textures, m_timer); // timer for RANDOM noice texture
+            LoadTextures(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_textures, m_timer); // timer for RANDOM noise texture
             LoadMeshes(  m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_meshes);
 
             std::cout << "\tcreating attachments...\n";
@@ -499,7 +501,8 @@ class Application
 
             std::cout << "\tcreating descriptor sets...\n";
             CreateTextureOnlyLayout(m_device, &m_DSLayouts.textureOnlyLayout);
-            CreateTextureDescriptorPool(m_device, m_DSPools.textureDSPool, m_textures.size() + 1 + 3); // + 1 for cubemap; + 3 for ssao inputs
+            CreateTextureDescriptorPool(m_device, m_DSPools.textureDSPool, m_textures.size() + 1 + 3 + 2);
+            // + 1 for cubemap; + 3 for ssao inputs; + 2 for ssao and blurred ssao
             CreateDSForEachModelTexture(m_device, &m_DSLayouts.textureOnlyLayout, m_DSPools.textureDSPool, m_inputTextures, m_textures);
             CreateDSForOtherInputAttachments(m_device, &m_DSLayouts.textureOnlyLayout, m_DSPools.textureDSPool, m_inputAttachments, m_attachments);
 
@@ -765,7 +768,7 @@ class Application
             colorAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
             colorAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            colorAttachment.finalLayout    = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorAttachment.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
             VkAttachmentReference colorAttachmentRef{};
             colorAttachmentRef.attachment = 0;
@@ -1075,6 +1078,16 @@ class Application
             a_inputAttachments.gNormals = InputTexture{ pNormals, VK_NULL_HANDLE };
             CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, a_inputAttachments.gNormals.descriptorSet,
                     pNormals->getImageView(), pNormals->getSampler());
+
+            Texture* pSSAO{ &a_attachments.ssao };
+            a_inputAttachments.ssao = InputTexture{ pSSAO, VK_NULL_HANDLE };
+            CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, a_inputAttachments.ssao.descriptorSet,
+                    pSSAO->getImageView(), pSSAO->getSampler());
+
+            Texture* pSSAOBlur{ &a_attachments.blurredSSAO };
+            a_inputAttachments.blurredSSAO = InputTexture{ pSSAOBlur, VK_NULL_HANDLE };
+            CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, a_inputAttachments.blurredSSAO.descriptorSet,
+                    pSSAOBlur->getImageView(), pSSAOBlur->getSampler());
         }
 
         static void CreateGraphicsPipelines(VkDevice a_device, VkExtent2D a_screenExtent, RenderPasses a_renderPasses,
@@ -1276,16 +1289,22 @@ class Application
             std::vector<VkDescriptorSetLayout> showCubemapDSLayout{ a_dsLayouts.textureOnlyLayout };
             createPipeline("show cubemap", showCubemapDSLayout, "showcubemap", a_renderPasses.finalRenderPass);
 
-            // ssao (fragment shader only) /////////////////////////////////////////////
-            // share vertex input with cubemap display pipline
+            // calculate ssao //////////////////////////////////////////////////////////
             std::vector<VkDescriptorSetLayout> ssaoDSLayout{
                 a_dsLayouts.textureOnlyLayout, // position
                 a_dsLayouts.textureOnlyLayout, // normals
-                a_dsLayouts.textureOnlyLayout, // noice
+                a_dsLayouts.textureOnlyLayout, // noise
                 a_dsLayouts.uboOnlyLayout      // full of sampling vectors
             };
 
             createPipeline("ssao", ssaoDSLayout, "ssao", a_renderPasses.ssaoPass);
+
+            // blur ssao ///////////////////////////////////////////////////////////////
+            std::vector<VkDescriptorSetLayout> ssaoBlurDSLayout{
+                a_dsLayouts.textureOnlyLayout  // ssao
+            };
+
+            createPipeline("blur ssao", ssaoBlurDSLayout, "blur", a_renderPasses.ssaoBlurPass);
 
             // render particle system //////////////////////////////////////////////////
             vertexDescr = ParticleSystem::getVertexDescription();
@@ -1612,6 +1631,44 @@ class Application
             vkCmdEndRenderPass(a_cmdBuffer);
         }
 
+        static void RecordCommandsOfBluringSSAO(VkDevice a_device, VkRenderPass a_renderPass, VkFramebuffer a_frameBuffer,
+                Mesh a_squareMesh, VkCommandBuffer a_cmdBuffer, Pipe a_pipe, InputTexture& a_ssao)
+        {
+            std::vector<VkClearValue> clearValues(2);
+            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[1].depthStencil = { 1.0f, 0 };
+
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass        = a_renderPass;
+            renderPassInfo.framebuffer       = a_frameBuffer;
+            renderPassInfo.renderArea.offset = { 0, 0 };
+            renderPassInfo.renderArea.extent = { (uint32_t)WIDTH, (uint32_t)HEIGHT };
+            renderPassInfo.clearValueCount   = clearValues.size();
+            renderPassInfo.pClearValues      = clearValues.data();
+
+            vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_pipe.pipeline);
+
+            std::vector<VkDescriptorSet> setsToBind{ a_ssao.descriptorSet };
+
+            vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_pipe.pipelineLayout, 0,
+                    setsToBind.size(), setsToBind.data(), 0, nullptr);
+
+            VkBuffer vbo{ a_squareMesh.getVBO().buffer };
+            VkBuffer ibo{ a_squareMesh.getIBO().buffer };
+
+            std::vector<VkDeviceSize> offsets{ 0 };
+
+            vkCmdBindVertexBuffers(a_cmdBuffer, 0, 1, &vbo, offsets.data());
+            vkCmdBindIndexBuffer(a_cmdBuffer, ibo, 0, VK_INDEX_TYPE_UINT32);
+
+            vkCmdDrawIndexed(a_cmdBuffer, 6, 1, 0, 0, 0);
+
+            vkCmdEndRenderPass(a_cmdBuffer);
+        }
+
         static void RecordCommandsToRenderForCubemapFace(VkFramebuffer a_frameBuffer, VkRenderPass a_renderPass, Pipe a_pipe,
                 const uint32_t a_face, VkCommandBuffer a_cmdBuff, const std::unordered_map<std::string, RenderObject>& a_objects,
                 Eye* a_light)
@@ -1711,8 +1768,10 @@ class Application
                 RecordCommandsOfFillingGBuffer(m_framebuffersOffscreen.gBufferCreationFrameBuffer, m_renderPasses.gBufferCreationPass,
                         m_pipes["g buffer"], a_cmdBuffer, m_renerables, m_pEyes["camera"]);
                 RecordCommandsOfSSAOEvaluation(m_device, m_renderPasses.ssaoPass, m_framebuffersOffscreen.ssaoFrameBuffer, m_meshes["quad"],
-                        a_cmdBuffer, m_pipes["ssao"], m_inputAttachments, m_inputTextures["noice"], m_roUniformBuffers["ssao kernel"],
+                        a_cmdBuffer, m_pipes["ssao"], m_inputAttachments, m_inputTextures["noise"], m_roUniformBuffers["ssao kernel"],
                         m_pEyes["camera"]->projection());
+                RecordCommandsOfBluringSSAO(m_device, m_renderPasses.ssaoBlurPass, m_framebuffersOffscreen.ssaoBlurFrameBuffer, m_meshes["quad"],
+                        a_cmdBuffer, m_pipes["blur ssao"], m_inputAttachments.ssao);
             }
 
             VkClearValue colorClear;
@@ -1900,7 +1959,7 @@ class Application
 
                 Texture& ssao = a_attachments.ssao;
                 ssao.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
-                ssao.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_FORMAT_R32_SFLOAT);
+                ssao.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32_SFLOAT);
 
                 imgBar = ssao.makeBarrier(ssao.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1908,7 +1967,7 @@ class Application
 
                 Texture& blurredSSAO = a_attachments.blurredSSAO;
                 blurredSSAO.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
-                blurredSSAO.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_FORMAT_R32_SFLOAT);
+                blurredSSAO.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32_SFLOAT);
 
                 imgBar = blurredSSAO.makeBarrier(blurredSSAO.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
