@@ -13,7 +13,8 @@ layout (location = 0) in VOUT
 layout(location = 0) out vec4 color;
 
 layout(set = 0, binding = 0) uniform sampler2D   texSampler;
-layout(set = 1, binding = 0) uniform samplerCube shadowCubemap;
+layout(set = 1, binding = 0) uniform samplerCube shadowMap;
+layout(set = 2, binding = 0) uniform sampler2D   ssaoMap;
 
 const float eps      = 0.15f;
 const float shadow   = 0.5f;
@@ -32,7 +33,7 @@ float PCF(vec3 a_toLight)
             {
                 vec3 lightVec = a_toLight + pcfDelta * vec3(x, y, z);
 
-                if (length(lightVec) > texture(shadowCubemap, lightVec).r + eps)
+                if (length(lightVec) > texture(shadowMap, lightVec).r + eps)
                 {
                     sumShadow += shadow; 
                 }
@@ -55,5 +56,6 @@ void main()
 
     color = vec4(0.1f) + diffuse * texture(texSampler, vInput.uv);
 
-    color.rgb *= PCF(toLight);
+    vec3 ssao = vec3(texelFetch(ssaoMap, ivec2(gl_FragCoord.xy), 0).r);
+    color.rgb *= PCF(toLight) * ssao;
 }

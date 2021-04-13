@@ -60,7 +60,8 @@ class Application
 
         GLFWwindow* m_window;
 
-        static bool  s_shadowmapDebug;
+        static bool s_shadowmapDebug;
+        static bool s_ssaoEnabled;
 
         Timer m_timer;
 
@@ -193,6 +194,9 @@ class Application
                         break;
                     case GLFW_KEY_2:
                         s_shadowmapDebug = true;
+                        break;
+                    case GLFW_KEY_3:
+                        s_ssaoEnabled = !s_ssaoEnabled;
                         break;
                 }
             }
@@ -382,6 +386,7 @@ class Application
             loadTexture("fireleviathan");
             loadTexture("white");
             loadTexture("bricks");
+            loadTexture("ground");
             loadTexture("fire");
             loadTexture("lion");
 
@@ -457,12 +462,12 @@ class Application
             // object / mesh / pipeline / texture
 
             createRenderable("fireleviathan", "fireleviathan", "scene", "fireleviathan");
-            createRenderable("surface", "surface", "scene", "white");
+            createRenderable("surface", "surface", "scene", "ground");
             createRenderable("small cube", "cube", "scene", "bricks");
             a_renerables["small cube"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(-6.5f, 0.3f, 0.5f));
             a_renerables["small cube"].matrix = glm::scale(a_renerables["small cube"].matrix, glm::vec3(1.0f, 4.0f, 7.0f));
 
-            createRenderable("lion", "lion", "scene", "white");
+            createRenderable("lion", "lion", "scene", "lion");
             a_renerables["lion"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -2.5f, 0.0f));
             a_renerables["lion"].matrix = glm::scale(a_renerables["lion"].matrix, glm::vec3(0.1f));
             a_renerables["lion"].matrix = glm::rotate(a_renerables["lion"].matrix, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
@@ -1250,7 +1255,11 @@ class Application
             };
 
             // render meshes ///////////////////////////////////////////////////////////
-            std::vector<VkDescriptorSetLayout> sceneDSLayouts{ a_dsLayouts.textureOnlyLayout, a_dsLayouts.textureOnlyLayout };
+            std::vector<VkDescriptorSetLayout> sceneDSLayouts{
+                a_dsLayouts.textureOnlyLayout,      // texture sapmler (for models)
+                    a_dsLayouts.textureOnlyLayout,  // shadow map
+                    a_dsLayouts.textureOnlyLayout   // ssao map
+            };
             createPipeline("scene", sceneDSLayouts, "scene", a_renderPasses.finalRenderPass);
 
             // fill gbuffer ////////////////////////////////////////////////////////////
@@ -1492,8 +1501,8 @@ class Application
         }
 
         static void RecordCommandsOfDrawingRenderables(std::unordered_map<std::string, RenderObject> a_objects, VkCommandBuffer a_cmdBuffer,
-                const Pipe* a_specialPipeline, Eye* a_eye, glm::vec3 a_lightPos, InputCubeTexture a_shadowCubemap, uint32_t a_face,
-                bool a_bindTextures)
+                const Pipe* a_specialPipeline, Eye* a_eye, glm::vec3 a_lightPos, InputCubeTexture a_shadowCubemap, InputTexture a_SSAOmap,
+                uint32_t a_face, bool a_bindTextures)
         {
             bool  specialPipeline{ a_specialPipeline != nullptr };
             Mesh* previousMesh{nullptr};
@@ -1521,11 +1530,15 @@ class Application
 
                 if (a_bindTextures)
                 {
-                    setsToBind.push_back(obj.texture->descriptorSet);
+                    setsToBind.push_back(obj.texture->descriptorSet); // #0
                 }
                 if (a_shadowCubemap.shadowCubemap != nullptr)
                 {
-                    setsToBind.push_back(a_shadowCubemap.descriptorSet);
+                    setsToBind.push_back(a_shadowCubemap.descriptorSet); // #1
+                    if (a_SSAOmap.texture != nullptr)
+                    {
+                        setsToBind.push_back(a_SSAOmap.descriptorSet); // #2
+                    }
                 }
 
                 if (setsToBind.size())
@@ -1578,7 +1591,8 @@ class Application
 
             vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, a_camera, glm::vec3(0.0f), InputCubeTexture{}, 0, true);
+            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, a_camera, glm::vec3(0.0f), InputCubeTexture{},
+                    InputTexture{}, 0, true);
 
             vkCmdEndRenderPass(a_cmdBuff);
         }
@@ -1689,7 +1703,7 @@ class Application
             vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
             RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, a_light, a_light->position(), InputCubeTexture{},
-                    a_face, false);
+                    InputTexture{}, a_face, false);
 
             vkCmdEndRenderPass(a_cmdBuff);
         }
@@ -1802,7 +1816,9 @@ class Application
             else
             {
                 RecordCommandsOfDrawingRenderables(m_renerables, a_cmdBuffer, nullptr, m_pEyes["camera"], m_pEyes["light"]->position(),
-                        m_inputAttachments.shadowCubemap, 0, true);
+                        m_inputAttachments.shadowCubemap,
+                        (s_ssaoEnabled) ? m_inputAttachments.blurredSSAO : m_inputTextures["white"],
+                        0, true);
                 RecordCommandsOfDrawingParticleSystems(m_particleSystems, a_cmdBuffer, m_pipes, m_pEyes["camera"]);
             }
 
@@ -2312,7 +2328,8 @@ class Application
         }
 };
 
-bool  Application::s_shadowmapDebug; // "2" binding (normal mode - "1")
+bool Application::s_shadowmapDebug;
+bool Application::s_ssaoEnabled{true};
 
 int main() 
 {
