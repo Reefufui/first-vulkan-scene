@@ -22,6 +22,7 @@
 #include <cassert>
 #include <unordered_map>
 #include <utility>
+#include <cmath>
 
 #include "vk_utils.h"
 
@@ -33,6 +34,8 @@
 #include "Eye.hpp"
 
 const int MAX_FRAMES_IN_FLIGHT = 3;
+// NOTE: hardcoded in shader
+const int SSAO_SAMPLING_KERNEL_SIZE = 30;
 
 const std::vector<const char*> deviceExtensions{
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
@@ -44,13 +47,21 @@ const bool enableValidationLayers = false;
 const bool enableValidationLayers = true;
 #endif
 
+struct PushConstants {
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 projection;
+    glm::vec3 lightPos;
+};
+
 class Application 
 {
     private:
 
         GLFWwindow* m_window;
 
-        static bool  s_shadowmapDebug;
+        static bool s_shadowmapDebug;
+        static bool s_ssaoEnabled;
 
         Timer m_timer;
 
@@ -69,8 +80,11 @@ class Application
         vk_utils::ScreenBufferResources m_screen;
 
         struct RenderPasses {
-            VkRenderPass     finalRenderPass;
-            VkRenderPass     shadowCubemapPass;
+            VkRenderPass shadowCubemapPass;
+            VkRenderPass gBufferCreationPass;
+            VkRenderPass ssaoPass;
+            VkRenderPass ssaoBlurPass;
+            VkRenderPass finalRenderPass;
         } m_renderPasses;
 
         VkCommandPool                m_commandPool;
@@ -79,15 +93,39 @@ class Application
 
         struct FramebuffersOffscreen {
             VkFramebuffer shadowCubemapFrameBuffer;
+            VkFramebuffer gBufferCreationFrameBuffer;
+            VkFramebuffer ssaoFrameBuffer;
+            VkFramebuffer ssaoBlurFrameBuffer;
         } m_framebuffersOffscreen;
 
         struct Attachments {
             // final pass
             Texture     presentDepth;
+            CubeTexture shadowCubemap;
+            // SSAO
+            Texture gPositionAndDepth;
+            Texture gNormals;
+            Texture gColor;
+            Texture ssao;
+            Texture blurredSSAO;
             // offscreen (shadow map)
-            Texture     offscreenDepth;
-            Texture     offscreenColor;
+            Texture offscreenDepth;
+            Texture offscreenColor;
         } m_attachments;
+
+        struct UniformBuffer {
+            VkBuffer        buffer;
+            VkDeviceMemory  memory;
+            VkDescriptorSet descriptorSet;
+        };
+
+        struct InputAttachments {
+            InputTexture     gPositionAndDepth;
+            InputTexture     gNormals;
+            InputTexture     ssao;
+            InputTexture     blurredSSAO;
+            InputCubeTexture shadowCubemap;
+        } m_inputAttachments;
 
         struct SyncObj
         {
@@ -101,15 +139,14 @@ class Application
             VkPipelineLayout              pipelineLayout;
         };
 
-        CubeTexture      m_shadowCubemapTexture;
-        InputCubeTexture m_shadowCubemap;
-
         struct DSLayouts {
             VkDescriptorSetLayout textureOnlyLayout; // suits cubemap texture as well
+            VkDescriptorSetLayout uboOnlyLayout;
         } m_DSLayouts;
 
         struct DSPools {
             VkDescriptorPool textureDSPool; // suits cubemap texture as well
+            VkDescriptorPool uboDSPool;
         } m_DSPools;
 
         struct RenderObject {
@@ -126,6 +163,9 @@ class Application
         std::unordered_map<std::string, RenderObject>   m_renerables;
         std::unordered_map<std::string, ParticleSystem> m_particleSystems;
         std::unordered_map<std::string, Eye*>           m_pEyes;
+        // r/w uniform buffers should be created for each MAX_FRAMES_IN_FLIGHT,
+        // but we do not use them in this application for simplicity
+        std::unordered_map<std::string, UniformBuffer>  m_roUniformBuffers; // ro = read only
 
         static VKAPI_ATTR VkBool32 VKAPI_CALL debugReportCallbackFn(
                 VkDebugReportFlagsEXT                       flags,
@@ -155,6 +195,9 @@ class Application
                     case GLFW_KEY_2:
                         s_shadowmapDebug = true;
                         break;
+                    case GLFW_KEY_3:
+                        s_ssaoEnabled = !s_ssaoEnabled;
+                        break;
                 }
             }
         }
@@ -177,7 +220,7 @@ class Application
             a_particleSystems["fire"] = fire;
         }
 
-        static void LoadDebugSquareMesh(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
+        static void LoadQuadMesh(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
                 std::unordered_map<std::string, Mesh>& a_meshes)
         {
             auto fillMeshBuffer = [&](VkBuffer& a_buffer, VkDeviceMemory& a_memory, void* a_src, VkBufferUsageFlags a_usage, size_t a_size)
@@ -221,7 +264,7 @@ class Application
 
             fillMeshBuffer(mesh.getIBO().buffer, mesh.getIBO().memory, indices, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 6 * sizeof(uint32_t));
 
-            a_meshes["debug square"] = mesh;
+            a_meshes["quad"] = mesh;
         }
 
         static void LoadMeshes(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
@@ -270,22 +313,22 @@ class Application
             loadMesh("lion");
 
             // This mesh is not from a file!
-            LoadDebugSquareMesh(a_device, a_physDevice, a_pool, a_queue, a_meshes);
+            LoadQuadMesh(a_device, a_physDevice, a_pool, a_queue, a_meshes);
         }
 
         static void LoadTextures(VkDevice a_device, VkPhysicalDevice a_physDevice, VkCommandPool a_pool, VkQueue a_queue,
-                std::unordered_map<std::string, Texture>& a_textures)
+                std::unordered_map<std::string, Texture>& a_textures, Timer a_timer)
         {
-            auto fillTexture = [&](Texture& a_texture)
+            auto fillTexture = [&](Texture& a_texture, void* a_src, size_t a_size)
             {
                 VkBuffer stagingBuffer{};
                 VkDeviceMemory stagingBufferMemory{};
 
-                CreateHostVisibleBuffer(a_device, a_physDevice, a_texture.getSize(), &stagingBuffer, &stagingBufferMemory);
+                CreateHostVisibleBuffer(a_device, a_physDevice, a_size, &stagingBuffer, &stagingBufferMemory);
 
                 void *mappedMemory = nullptr;
-                vkMapMemory(a_device, stagingBufferMemory, 0, a_texture.getSize(), 0, &mappedMemory);
-                memcpy(mappedMemory, a_texture.rgba, a_texture.getSize());
+                vkMapMemory(a_device, stagingBufferMemory, 0, a_size, 0, &mappedMemory);
+                memcpy(mappedMemory, a_src, a_size);
                 vkUnmapMemory(a_device, stagingBufferMemory);
 
                 VkCommandBufferAllocateInfo allocInfo = {};
@@ -331,10 +374,11 @@ class Application
                 fileName.insert(fileName.find("."), textureName);
 
                 texture.loadFromPNG(fileName.c_str());
+                if (textureName != "fire") texture.setAddressMode(VK_SAMPLER_ADDRESS_MODE_REPEAT);
 
                 texture.create(a_device, a_physDevice, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_SRGB);
 
-                fillTexture(texture);
+                fillTexture(texture, texture.rgba, texture.getSize());
 
                 a_textures[textureName] = texture;
             };
@@ -342,10 +386,40 @@ class Application
             loadTexture("fireleviathan");
             loadTexture("white");
             loadTexture("bricks");
+            loadTexture("ground");
             loadTexture("fire");
             loadTexture("lion");
-        }
 
+            // This texture is not from a file! (for SSAO)
+            {
+                a_timer.timeStamp();
+                std::default_random_engine randomEngine{ (long unsigned int)a_timer.getTime() };
+
+                auto random = [&](float a_range)
+                {
+                    std::uniform_real_distribution<float> randomDistribution(0.0f, a_range);
+                    return randomDistribution(randomEngine);
+                };
+
+                std::vector<glm::vec4> randomNoice(4 * 4);
+                for (auto& rotVector : randomNoice)
+                {
+                    rotVector = glm::vec4(random(2.0f) - 1.0f, random(2.0f) - 1.0f, 0.0f, 0.0f);
+                }
+
+                Texture texture{};
+
+                texture.setExtent(VkExtent3D{4, 4, 1});
+                texture.setAddressMode(VK_SAMPLER_ADDRESS_MODE_REPEAT);
+                texture.create(a_device, a_physDevice, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32G32B32A32_SFLOAT);
+
+                fillTexture(texture, randomNoice.data(), randomNoice.size() * sizeof(glm::vec4));
+
+                a_textures["noise"] = texture;
+
+                randomNoice = std::vector<glm::vec4>(0);
+            }
+        }
 
         static void ComposeScene(std::unordered_map<std::string, RenderObject>& a_renerables, std::unordered_map<std::string, Pipe>& a_pipes,
                 std::unordered_map<std::string, Mesh>& a_meshes, std::unordered_map<std::string, InputTexture>& a_textures)
@@ -388,12 +462,12 @@ class Application
             // object / mesh / pipeline / texture
 
             createRenderable("fireleviathan", "fireleviathan", "scene", "fireleviathan");
-            createRenderable("surface", "surface", "scene", "white");
+            createRenderable("surface", "surface", "scene", "ground");
             createRenderable("small cube", "cube", "scene", "bricks");
-            a_renerables["small cube"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(-6.5f, 0.5f, 0.5f));
+            a_renerables["small cube"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(-6.5f, 0.3f, 0.5f));
             a_renerables["small cube"].matrix = glm::scale(a_renerables["small cube"].matrix, glm::vec3(1.0f, 4.0f, 7.0f));
 
-            createRenderable("lion", "lion", "scene", "white");
+            createRenderable("lion", "lion", "scene", "lion");
             a_renerables["lion"].matrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -2.5f, 0.0f));
             a_renerables["lion"].matrix = glm::scale(a_renerables["lion"].matrix, glm::vec3(0.1f));
             a_renerables["lion"].matrix = glm::rotate(a_renerables["lion"].matrix, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
@@ -423,33 +497,48 @@ class Application
             CreateSyncObjects(m_device, &m_sync);
 
             std::cout << "\tloading assets...\n";
-            LoadTextures(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_textures);
+            LoadTextures(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_textures, m_timer); // timer for RANDOM noise texture
             LoadMeshes(  m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_meshes);
 
             std::cout << "\tcreating attachments...\n";
             CreateAttachments(     m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_attachments);
-            CreateShadowmapTexture(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_shadowCubemapTexture);
+            CreateShadowmapTexture(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_attachments.shadowCubemap);
 
             std::cout << "\tcreating descriptor sets...\n";
             CreateTextureOnlyLayout(m_device, &m_DSLayouts.textureOnlyLayout);
-            CreateTextureDescriptorPool(m_device, m_DSPools.textureDSPool, m_textures.size() + 1); // + 1 for cubemap
-            CreateDSForEachTexture(m_device, &m_DSLayouts.textureOnlyLayout, m_DSPools.textureDSPool, m_inputTextures, m_textures,
-                    m_shadowCubemap, m_shadowCubemapTexture);
+            CreateTextureDescriptorPool(m_device, m_DSPools.textureDSPool, m_textures.size() + 1 + 3 + 2);
+            // + 1 for cubemap; + 3 for ssao inputs; + 2 for ssao and blurred ssao
+            CreateDSForEachModelTexture(m_device, &m_DSLayouts.textureOnlyLayout, m_DSPools.textureDSPool, m_inputTextures, m_textures);
+            CreateDSForOtherInputAttachments(m_device, &m_DSLayouts.textureOnlyLayout, m_DSPools.textureDSPool, m_inputAttachments, m_attachments);
+
+            CreateUBOOnlyLayout(m_device, &m_DSLayouts.uboOnlyLayout);
+            CreateUBODescriptorPool(m_device, m_DSPools.uboDSPool, 1); // 1 for ssao sampling kernel
+            CreateReadOnlyUBOs(m_device, physicalDevice, m_graphicsQueue, m_commandPool, &m_DSLayouts.uboOnlyLayout, m_DSPools.uboDSPool,
+                    m_roUniformBuffers, m_timer);
 
             std::cout << "\tcreating render passes...\n";
-            CreateFinalRenderpass(        m_device, &(m_renderPasses.finalRenderPass), m_screen.swapChainImageFormat);
+            CreateFinalRenderpass(m_device, &(m_renderPasses.finalRenderPass), m_screen.swapChainImageFormat);
+            CreateGBufferRenderPass(m_device, &(m_renderPasses.gBufferCreationPass));
+            CreateSSAORenderPass(m_device, &(m_renderPasses.ssaoPass));
+            CreateSSAOBlurRenderPass(m_device, &(m_renderPasses.ssaoBlurPass));
             CreateShadowCubemapRenderPass(m_device, &(m_renderPasses.shadowCubemapPass));
 
             std::cout << "\tcreating frame buffers...\n";
             CreateScreenFrameBuffers(m_device, m_renderPasses.finalRenderPass, &m_screen, m_attachments);
+            CreateGBufferFrameBuffer(m_device, m_renderPasses.gBufferCreationPass,
+                    m_framebuffersOffscreen.gBufferCreationFrameBuffer, m_attachments);
+            CreateSSAOFrameBuffer(m_device, m_renderPasses.ssaoPass,
+                    m_framebuffersOffscreen.ssaoFrameBuffer, m_attachments);
+            CreateSSAOBlurFrameBuffer(m_device, m_renderPasses.ssaoPass,
+                    m_framebuffersOffscreen.ssaoBlurFrameBuffer, m_attachments);
             CreateShadowCubemapFrameBuffer(m_device, m_renderPasses.shadowCubemapPass,
                     m_framebuffersOffscreen.shadowCubemapFrameBuffer, m_attachments);
 
-            std::cout << "\tcreating frame buffers...\n";
-            CreateEyes(m_pEyes, &m_timer);
-
             std::cout << "\tcreating graphics pipelines...\n";
             CreateGraphicsPipelines(m_device, m_screen.swapChainExtent, m_renderPasses, m_pipes, m_DSLayouts);
+
+            std::cout << "\tcreating camera & light...\n";
+            CreateEyes(m_pEyes, &m_timer);
 
             std::cout << "\tcreating particle systems...\n";
             CreateParticleSystem(m_device, physicalDevice, m_commandPool, m_graphicsQueue, m_particleSystems, m_inputTextures,
@@ -486,7 +575,6 @@ class Application
             colorAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
             colorAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            colorAttachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
             colorAttachment.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
             VkAttachmentReference colorAttachmentRef{};
@@ -500,7 +588,6 @@ class Application
             depthAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
             depthAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR;
             depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            depthAttachment.initialLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depthAttachment.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
             VkAttachmentReference depthAttachmentRef{};
@@ -538,6 +625,209 @@ class Application
                 throw std::runtime_error("[CreateFinalRenderpass]: failed to create render pass!");
         }
 
+        static void CreateGBufferRenderPass(VkDevice a_device, VkRenderPass* a_pRenderPass)
+        {
+            std::vector<VkAttachmentDescription> attachmentDescr(4);
+
+            attachmentDescr[0].format = VK_FORMAT_R32G32B32A32_SFLOAT; // vec3(position)float(depth)
+            attachmentDescr[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;      // vec3(normals)
+            attachmentDescr[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;      // vec3(color)
+            attachmentDescr[3].format = VK_FORMAT_D32_SFLOAT;          // depth
+
+            for (size_t i{}; i < 4; ++i)
+            {
+                attachmentDescr[i].samples        = VK_SAMPLE_COUNT_1_BIT;
+                attachmentDescr[i].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                attachmentDescr[i].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+                attachmentDescr[i].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                attachmentDescr[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                attachmentDescr[i].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            }
+
+            attachmentDescr[3].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+            std::vector<VkAttachmentReference> colorAttachmentRef {
+                {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+                    {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+                    {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}
+            };
+
+            VkAttachmentReference depthAttachmentRef { 3, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+
+            VkSubpassDescription subpass {};
+            subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            subpass.colorAttachmentCount    = colorAttachmentRef.size();
+            subpass.pColorAttachments       = colorAttachmentRef.data();
+            subpass.pDepthStencilAttachment = &depthAttachmentRef;
+
+            std::vector<VkSubpassDependency> dependency {
+                {
+                    VK_SUBPASS_EXTERNAL,
+                        0,
+
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, // -->
+
+                        VK_ACCESS_SHADER_READ_BIT,
+                        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, // ==>
+
+                        VK_DEPENDENCY_BY_REGION_BIT
+                },
+                    {
+                        0,
+                        VK_SUBPASS_EXTERNAL,
+
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, // <--
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+
+                        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, // <==
+                        VK_ACCESS_SHADER_READ_BIT,
+
+                        VK_DEPENDENCY_BY_REGION_BIT
+                    }
+            };
+
+            VkRenderPassCreateInfo renderPassInfo{};
+            renderPassInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+            renderPassInfo.attachmentCount = attachmentDescr.size();
+            renderPassInfo.pAttachments    = attachmentDescr.data();
+            renderPassInfo.subpassCount    = 1;
+            renderPassInfo.pSubpasses      = &subpass;
+            renderPassInfo.dependencyCount = dependency.size();
+            renderPassInfo.pDependencies   = dependency.data();
+
+            if (vkCreateRenderPass(a_device, &renderPassInfo, nullptr, a_pRenderPass) != VK_SUCCESS)
+                throw std::runtime_error("[CreateGBufferRenderPass]: failed to create render pass!");
+        }
+
+        static void CreateSSAOBlurRenderPass(VkDevice a_device, VkRenderPass* a_pRenderPass)
+        {
+            VkAttachmentDescription colorAttachment{};
+            colorAttachment.format         = VK_FORMAT_R32_SFLOAT;
+            colorAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
+            colorAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            colorAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+            colorAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            colorAttachment.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            VkAttachmentReference colorAttachmentRef{};
+            colorAttachmentRef.attachment = 0;
+            colorAttachmentRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+            VkSubpassDescription subpass {};
+            subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            subpass.colorAttachmentCount = 1;
+            subpass.pColorAttachments    = &colorAttachmentRef;
+
+            std::vector<VkAttachmentDescription> attachments{
+                colorAttachment
+            };
+
+            std::vector<VkSubpassDependency> dependency {
+                {
+                    VK_SUBPASS_EXTERNAL,
+                        0,
+
+                        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, // -->
+
+                        VK_ACCESS_MEMORY_READ_BIT,
+                        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, // ==>
+
+                        VK_DEPENDENCY_BY_REGION_BIT
+                },
+                    {
+                        0,
+                        VK_SUBPASS_EXTERNAL,
+
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, // <--
+                        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+
+                        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, // <==
+                        VK_ACCESS_MEMORY_READ_BIT,
+
+                        VK_DEPENDENCY_BY_REGION_BIT
+                    }
+            };
+
+            VkRenderPassCreateInfo renderPassInfo{};
+            renderPassInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+            renderPassInfo.attachmentCount = attachments.size();
+            renderPassInfo.pAttachments    = attachments.data();
+            renderPassInfo.subpassCount    = 1;
+            renderPassInfo.pSubpasses      = &subpass;
+            renderPassInfo.dependencyCount = dependency.size();
+            renderPassInfo.pDependencies   = dependency.data();
+
+            if (vkCreateRenderPass(a_device, &renderPassInfo, nullptr, a_pRenderPass) != VK_SUCCESS)
+                throw std::runtime_error("[CreateSSAOBlurRenderPass]: failed to create render pass!");
+        }
+
+        static void CreateSSAORenderPass(VkDevice a_device, VkRenderPass* a_pRenderPass)
+        {
+            VkAttachmentDescription colorAttachment{};
+            colorAttachment.format         = VK_FORMAT_R32_SFLOAT;
+            colorAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
+            colorAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            colorAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+            colorAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            colorAttachment.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            VkAttachmentReference colorAttachmentRef{};
+            colorAttachmentRef.attachment = 0;
+            colorAttachmentRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+            VkSubpassDescription subpass {};
+            subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            subpass.colorAttachmentCount = 1;
+            subpass.pColorAttachments    = &colorAttachmentRef;
+
+            std::vector<VkAttachmentDescription> attachments{
+                colorAttachment
+            };
+
+            std::vector<VkSubpassDependency> dependency {
+                {
+                    VK_SUBPASS_EXTERNAL,
+                        0,
+
+                        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, // -->
+
+                        VK_ACCESS_MEMORY_READ_BIT,
+                        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, // ==>
+
+                        VK_DEPENDENCY_BY_REGION_BIT
+                },
+                    {
+                        0,
+                        VK_SUBPASS_EXTERNAL,
+
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, // <--
+                        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+
+                        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, // <==
+                        VK_ACCESS_MEMORY_READ_BIT,
+
+                        VK_DEPENDENCY_BY_REGION_BIT
+                    }
+            };
+
+            VkRenderPassCreateInfo renderPassInfo{};
+            renderPassInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+            renderPassInfo.attachmentCount = attachments.size();
+            renderPassInfo.pAttachments    = attachments.data();
+            renderPassInfo.subpassCount    = 1;
+            renderPassInfo.pSubpasses      = &subpass;
+            renderPassInfo.dependencyCount = dependency.size();
+            renderPassInfo.pDependencies   = dependency.data();
+
+            if (vkCreateRenderPass(a_device, &renderPassInfo, nullptr, a_pRenderPass) != VK_SUCCESS)
+                throw std::runtime_error("[CreateSSAORenderPass]: failed to create render pass!");
+        }
+
         static void CreateShadowCubemapRenderPass(VkDevice a_device, VkRenderPass* a_pRenderPass)
         {
             VkAttachmentDescription colorAttachment{};
@@ -547,7 +837,6 @@ class Application
             colorAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
             colorAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            colorAttachment.initialLayout  = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             colorAttachment.finalLayout    = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
             VkAttachmentReference colorAttachmentRef{};
@@ -561,7 +850,6 @@ class Application
             depthAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
             depthAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR;
             depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            depthAttachment.initialLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depthAttachment.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
             VkAttachmentReference depthAttachmentRef{};
@@ -609,6 +897,104 @@ class Application
                 throw std::runtime_error("[CreateTextureOnlyLayout]: failed to create DS layout!");
         }
 
+        static void CreateUBOOnlyLayout(VkDevice a_device, VkDescriptorSetLayout *a_pDSLayout)
+        {
+            VkDescriptorSetLayoutBinding uboLayoutBinding{};
+            uboLayoutBinding.binding            = 0;
+            uboLayoutBinding.descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            uboLayoutBinding.descriptorCount    = 1;
+            uboLayoutBinding.stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
+            uboLayoutBinding.pImmutableSamplers = nullptr;
+
+            std::array<VkDescriptorSetLayoutBinding, 1> binds = {uboLayoutBinding};
+
+            VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo{};
+            descriptorSetLayoutCreateInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            descriptorSetLayoutCreateInfo.bindingCount = binds.size();
+            descriptorSetLayoutCreateInfo.pBindings    = binds.data();
+
+            if (vkCreateDescriptorSetLayout(a_device, &descriptorSetLayoutCreateInfo, nullptr, a_pDSLayout) != VK_SUCCESS)
+                throw std::runtime_error("[CreateTextureOnlyLayout]: failed to create DS layout!");
+        }
+
+        static void CreateOneUBODescriptorSet(VkDevice a_device, const VkDescriptorSetLayout *a_pDSLayout, VkDescriptorPool& a_DSPool,
+                VkDescriptorSet& a_dset, VkBuffer& a_buffer, VkDeviceSize a_bufferSize)
+        {
+            VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{};
+            descriptorSetAllocateInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            descriptorSetAllocateInfo.descriptorPool     = a_DSPool;
+            descriptorSetAllocateInfo.descriptorSetCount = 1;
+            descriptorSetAllocateInfo.pSetLayouts        = a_pDSLayout;
+
+            if (vkAllocateDescriptorSets(a_device, &descriptorSetAllocateInfo, &a_dset) != VK_SUCCESS)
+                throw std::runtime_error("[CreateOneUBODescriptorSet]: failed to allocate descriptor set pool!");
+
+            VkWriteDescriptorSet descrWrite{};
+            descrWrite.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descrWrite.dstSet            = a_dset;
+            descrWrite.dstBinding        = 0;
+            descrWrite.dstArrayElement   = 0;
+            descrWrite.descriptorType    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descrWrite.descriptorCount   = 1;
+
+            VkDescriptorBufferInfo bufferInfo{ a_buffer, 0, a_bufferSize };
+            descrWrite.pBufferInfo        = &bufferInfo;
+
+            vkUpdateDescriptorSets(a_device, 1, &descrWrite, 0, nullptr);
+        }
+
+        // read only <== one for all frames in flight (READ - READ)
+        static void CreateReadOnlyUBOs(VkDevice a_device, VkPhysicalDevice a_physDevice, VkQueue a_queue, VkCommandPool a_pool,
+                VkDescriptorSetLayout* a_pDSLayout, VkDescriptorPool& a_dsPool,
+                std::unordered_map<std::string, UniformBuffer>& a_UBOs, Timer a_timer)
+        {
+            a_timer.timeStamp();
+            std::default_random_engine randomEngine{ (long unsigned int)a_timer.getTime() };
+
+            auto random = [&](float a_range)
+            {
+                std::uniform_real_distribution<float> randomDistribution(0.0f, a_range);
+                return randomDistribution(randomEngine);
+            };
+
+            UniformBuffer ssaoSamplerKernel{ VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE };
+            // data for ssao sampler kernel ubo
+            std::vector<glm::vec4> kernel(SSAO_SAMPLING_KERNEL_SIZE);
+            {
+                for (auto& sampleVector : kernel)
+                {
+                    glm::vec3 vec = glm::vec3(random(2.0f) - 1.0f, random(2.0f) - 1.0f, random(1.0f));
+                    vec = glm::normalize(vec) * random(1.0f);
+                    sampleVector = glm::vec4(vec, 1.0f);
+                };
+            }
+
+            {
+                VkBuffer stagingBuffer{};
+                VkDeviceMemory stagingBufferMemory{};
+                size_t size{ kernel.size() * sizeof(glm::vec4) };
+
+                CreateHostVisibleBuffer(a_device, a_physDevice, size, &stagingBuffer, &stagingBufferMemory);
+
+                void *mappedMemory = nullptr;
+                vkMapMemory(a_device, stagingBufferMemory, 0, size, 0, &mappedMemory);
+                memcpy(mappedMemory, kernel.data(), size);
+                vkUnmapMemory(a_device, stagingBufferMemory);
+
+                CreateDeviceLocalBuffer(a_device, a_physDevice, size, &ssaoSamplerKernel.buffer, &ssaoSamplerKernel.memory,
+                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+
+                SubmitStagingBuffer(a_device, a_pool, a_queue, stagingBuffer, ssaoSamplerKernel.buffer, size);
+
+                vkFreeMemory(a_device, stagingBufferMemory, nullptr);
+                vkDestroyBuffer(a_device, stagingBuffer, nullptr);
+
+                CreateOneUBODescriptorSet(a_device, a_pDSLayout, a_dsPool, ssaoSamplerKernel.descriptorSet, ssaoSamplerKernel.buffer, size);
+            }
+
+            a_UBOs["ssao kernel"] = ssaoSamplerKernel;
+        }
+
         static void CreateOneImageDescriptorSet(VkDevice a_device, const VkDescriptorSetLayout *a_pDSLayout, VkDescriptorPool& a_DSPool,
                 VkDescriptorSet& a_dset, VkImageView a_imageView, VkSampler a_imageSampler)
         {
@@ -636,6 +1022,21 @@ class Application
         }
 
         // this suits cubemap texture as well
+        static void CreateUBODescriptorPool(VkDevice a_device, VkDescriptorPool& a_dsPool, uint32_t a_count)
+        {
+            VkDescriptorPoolSize poolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, a_count };
+
+            VkDescriptorPoolCreateInfo descriptorPoolCreateInfo{};
+            descriptorPoolCreateInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            descriptorPoolCreateInfo.maxSets       = a_count;
+            descriptorPoolCreateInfo.poolSizeCount = 1;
+            descriptorPoolCreateInfo.pPoolSizes    = &poolSize;
+
+            if (vkCreateDescriptorPool(a_device, &descriptorPoolCreateInfo, nullptr, &a_dsPool) != VK_SUCCESS)
+                throw std::runtime_error("[CreateUBODescriptorPool]: failed to create descriptor set pool!");
+        }
+
+        // this suits cubemap texture as well
         static void CreateTextureDescriptorPool(VkDevice a_device, VkDescriptorPool& a_dsPool, uint32_t a_count)
         {
             VkDescriptorPoolSize poolSize{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, a_count };
@@ -647,12 +1048,11 @@ class Application
             descriptorPoolCreateInfo.pPoolSizes    = &poolSize;
 
             if (vkCreateDescriptorPool(a_device, &descriptorPoolCreateInfo, nullptr, &a_dsPool) != VK_SUCCESS)
-                throw std::runtime_error("[CreateDSForEachTexture]: failed to create descriptor set pool!");
+                throw std::runtime_error("[CreateTextureDescriptorPool]: failed to create descriptor set pool!");
         }
 
-        static void CreateDSForEachTexture(VkDevice a_device, VkDescriptorSetLayout* a_pDSLayout, VkDescriptorPool& a_dsPool,
-                std::unordered_map<std::string, InputTexture>& a_inputTextures, std::unordered_map<std::string, Texture>& a_textures,
-                InputCubeTexture& a_inputCubeTexture, CubeTexture& a_cubeTexture)
+        static void CreateDSForEachModelTexture(VkDevice a_device, VkDescriptorSetLayout* a_pDSLayout, VkDescriptorPool& a_dsPool,
+                std::unordered_map<std::string, InputTexture>& a_inputTextures, std::unordered_map<std::string, Texture>& a_textures)
         {
             for (auto& texture : a_textures)
             {
@@ -663,15 +1063,41 @@ class Application
 
                 a_inputTextures[texture.first] = inputTexture;
             }
+        }
 
-            a_inputCubeTexture.shadowCubemap = &a_cubeTexture;
-            CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, a_inputCubeTexture.descriptorSet, a_cubeTexture.getImageView(), a_cubeTexture.getSampler());
+        static void CreateDSForOtherInputAttachments(VkDevice a_device, VkDescriptorSetLayout* a_pDSLayout, VkDescriptorPool& a_dsPool,
+                InputAttachments& a_inputAttachments, Attachments& a_attachments)
+
+        {
+            CubeTexture* pCubemapTexture{ &a_attachments.shadowCubemap };
+            a_inputAttachments.shadowCubemap = InputCubeTexture{ pCubemapTexture, VK_NULL_HANDLE };
+            CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, a_inputAttachments.shadowCubemap.descriptorSet,
+                    pCubemapTexture->getImageView(), pCubemapTexture->getSampler());
+
+            Texture* pPositionAndDepth{ &a_attachments.gPositionAndDepth };
+            a_inputAttachments.gPositionAndDepth = InputTexture{ pPositionAndDepth, VK_NULL_HANDLE };
+            CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, a_inputAttachments.gPositionAndDepth.descriptorSet,
+                    pPositionAndDepth->getImageView(), pPositionAndDepth->getSampler());
+
+            Texture* pNormals{ &a_attachments.gNormals };
+            a_inputAttachments.gNormals = InputTexture{ pNormals, VK_NULL_HANDLE };
+            CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, a_inputAttachments.gNormals.descriptorSet,
+                    pNormals->getImageView(), pNormals->getSampler());
+
+            Texture* pSSAO{ &a_attachments.ssao };
+            a_inputAttachments.ssao = InputTexture{ pSSAO, VK_NULL_HANDLE };
+            CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, a_inputAttachments.ssao.descriptorSet,
+                    pSSAO->getImageView(), pSSAO->getSampler());
+
+            Texture* pSSAOBlur{ &a_attachments.blurredSSAO };
+            a_inputAttachments.blurredSSAO = InputTexture{ pSSAOBlur, VK_NULL_HANDLE };
+            CreateOneImageDescriptorSet(a_device, a_pDSLayout, a_dsPool, a_inputAttachments.blurredSSAO.descriptorSet,
+                    pSSAOBlur->getImageView(), pSSAOBlur->getSampler());
         }
 
         static void CreateGraphicsPipelines(VkDevice a_device, VkExtent2D a_screenExtent, RenderPasses a_renderPasses,
                 std::unordered_map<std::string, Pipe>& a_pipes, DSLayouts a_dsLayouts)
         {
-            // initializing default pipeline structures
             VertexInputDescription vertexDescr{ Vertex::getVertexDescription() };
             VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
             vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -829,13 +1255,36 @@ class Application
             };
 
             // render meshes ///////////////////////////////////////////////////////////
-            std::vector<VkDescriptorSetLayout> sceneDSLayouts{ a_dsLayouts.textureOnlyLayout, a_dsLayouts.textureOnlyLayout };
+            std::vector<VkDescriptorSetLayout> sceneDSLayouts{
+                a_dsLayouts.textureOnlyLayout,      // texture sapmler (for models)
+                    a_dsLayouts.textureOnlyLayout,  // shadow map
+                    a_dsLayouts.textureOnlyLayout   // ssao map
+            };
             createPipeline("scene", sceneDSLayouts, "scene", a_renderPasses.finalRenderPass);
+
+            // fill gbuffer ////////////////////////////////////////////////////////////
+            std::vector<VkPipelineColorBlendAttachmentState> blendAttachmentStates(3);
+            for (auto& blend : blendAttachmentStates)
+            {
+                blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+                blend.blendEnable    = VK_FALSE;
+            }
+
+            colorBlending.attachmentCount = blendAttachmentStates.size();
+            colorBlending.pAttachments    = blendAttachmentStates.data();
+
+            std::vector<VkDescriptorSetLayout> gBufferDSLayouts{ a_dsLayouts.textureOnlyLayout };
+            createPipeline("g buffer", gBufferDSLayouts, "gbuffer", a_renderPasses.gBufferCreationPass);
+
+            blendAttachmentStates = std::vector<VkPipelineColorBlendAttachmentState>(0);
+            colorBlending.attachmentCount   = 1;
+            colorBlending.pAttachments      = &colorBlendAttachment;
 
             // render to cubemap face //////////////////////////////////////////////////
             std::vector<VkDescriptorSetLayout> shadowCubemapDSLayout(0);
             createPipeline("shadow cubemap", shadowCubemapDSLayout, "shadowmap", a_renderPasses.shadowCubemapPass);
 
+            rasterizer.cullMode = VK_CULL_MODE_NONE;
             // display cubemap faces ///////////////////////////////////////////////////
             VkVertexInputBindingDescription   inputBindings{ 0, sizeof(float) * 2, VK_VERTEX_INPUT_RATE_VERTEX };
             VkVertexInputAttributeDescription attributes{ 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
@@ -848,6 +1297,23 @@ class Application
 
             std::vector<VkDescriptorSetLayout> showCubemapDSLayout{ a_dsLayouts.textureOnlyLayout };
             createPipeline("show cubemap", showCubemapDSLayout, "showcubemap", a_renderPasses.finalRenderPass);
+
+            // calculate ssao //////////////////////////////////////////////////////////
+            std::vector<VkDescriptorSetLayout> ssaoDSLayout{
+                a_dsLayouts.textureOnlyLayout, // position
+                a_dsLayouts.textureOnlyLayout, // normals
+                a_dsLayouts.textureOnlyLayout, // noise
+                a_dsLayouts.uboOnlyLayout      // full of sampling vectors
+            };
+
+            createPipeline("ssao", ssaoDSLayout, "ssao", a_renderPasses.ssaoPass);
+
+            // blur ssao ///////////////////////////////////////////////////////////////
+            std::vector<VkDescriptorSetLayout> ssaoBlurDSLayout{
+                a_dsLayouts.textureOnlyLayout  // ssao
+            };
+
+            createPipeline("blur ssao", ssaoBlurDSLayout, "blur", a_renderPasses.ssaoBlurPass);
 
             // render particle system //////////////////////////////////////////////////
             vertexDescr = ParticleSystem::getVertexDescription();
@@ -905,6 +1371,66 @@ class Application
                 if (vkCreateFramebuffer(a_device, &framebufferInfo, nullptr, &pScreen->swapChainFramebuffers[i]) != VK_SUCCESS)
                     throw std::runtime_error("failed to create framebuffer!");
             }
+        }
+
+        static void CreateSSAOFrameBuffer(VkDevice a_device, VkRenderPass a_renderPass, VkFramebuffer& a_frameBuffer, Attachments& a_attachments)
+        {
+            std::vector<VkImageView> attachments {
+                a_attachments.ssao.getImageView(),
+            };
+
+            VkFramebufferCreateInfo framebufferInfo = {};
+            framebufferInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            framebufferInfo.renderPass      = a_renderPass;
+            framebufferInfo.attachmentCount = attachments.size();
+            framebufferInfo.pAttachments    = attachments.data();
+            framebufferInfo.width           = WIDTH;
+            framebufferInfo.height          = HEIGHT;
+            framebufferInfo.layers          = 1;
+
+            if (vkCreateFramebuffer(a_device, &framebufferInfo, nullptr, &a_frameBuffer) != VK_SUCCESS)
+                throw std::runtime_error("failed to create framebuffer!");
+        }
+
+        static void CreateSSAOBlurFrameBuffer(VkDevice a_device, VkRenderPass a_renderPass, VkFramebuffer& a_frameBuffer, Attachments& a_attachments)
+        {
+            std::vector<VkImageView> attachments {
+                a_attachments.blurredSSAO.getImageView(),
+            };
+
+            VkFramebufferCreateInfo framebufferInfo = {};
+            framebufferInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            framebufferInfo.renderPass      = a_renderPass;
+            framebufferInfo.attachmentCount = attachments.size();
+            framebufferInfo.pAttachments    = attachments.data();
+            framebufferInfo.width           = WIDTH;
+            framebufferInfo.height          = HEIGHT;
+            framebufferInfo.layers          = 1;
+
+            if (vkCreateFramebuffer(a_device, &framebufferInfo, nullptr, &a_frameBuffer) != VK_SUCCESS)
+                throw std::runtime_error("failed to create framebuffer!");
+        }
+
+        static void CreateGBufferFrameBuffer(VkDevice a_device, VkRenderPass a_renderPass, VkFramebuffer& a_frameBuffer, Attachments& a_attachments)
+        {
+            std::vector<VkImageView> attachments {
+                a_attachments.gPositionAndDepth.getImageView(),
+                    a_attachments.gNormals.getImageView(),
+                    a_attachments.gColor.getImageView(),
+                    a_attachments.presentDepth.getImageView()
+            };
+
+            VkFramebufferCreateInfo framebufferInfo = {};
+            framebufferInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            framebufferInfo.renderPass      = a_renderPass;
+            framebufferInfo.attachmentCount = attachments.size();
+            framebufferInfo.pAttachments    = attachments.data();
+            framebufferInfo.width           = WIDTH;
+            framebufferInfo.height          = HEIGHT;
+            framebufferInfo.layers          = 1;
+
+            if (vkCreateFramebuffer(a_device, &framebufferInfo, nullptr, &a_frameBuffer) != VK_SUCCESS)
+                throw std::runtime_error("failed to create framebuffer!");
         }
 
         static void CreateShadowCubemapFrameBuffer(VkDevice a_device, VkRenderPass a_renderPass, VkFramebuffer& a_frameBuffer, Attachments& a_attachments)
@@ -975,7 +1501,8 @@ class Application
         }
 
         static void RecordCommandsOfDrawingRenderables(std::unordered_map<std::string, RenderObject> a_objects, VkCommandBuffer a_cmdBuffer,
-                const Pipe* a_specialPipeline, Eye* a_eye, glm::vec3 a_lightPos, InputCubeTexture a_shadowCubemap, uint32_t a_face)
+                const Pipe* a_specialPipeline, Eye* a_eye, glm::vec3 a_lightPos, InputCubeTexture a_shadowCubemap, InputTexture a_SSAOmap,
+                uint32_t a_face, bool a_bindTextures)
         {
             bool  specialPipeline{ a_specialPipeline != nullptr };
             Mesh* previousMesh{nullptr};
@@ -999,12 +1526,23 @@ class Application
                     previousPipe = obj.pipe;
                 }
 
-                if (!specialPipeline)
-                {
-                    std::vector<VkDescriptorSet> setsToBind{
-                        obj.texture->descriptorSet, a_shadowCubemap.descriptorSet
-                    };
+                std::vector<VkDescriptorSet> setsToBind(0);
 
+                if (a_bindTextures)
+                {
+                    setsToBind.push_back(obj.texture->descriptorSet); // #0
+                }
+                if (a_shadowCubemap.shadowCubemap != nullptr)
+                {
+                    setsToBind.push_back(a_shadowCubemap.descriptorSet); // #1
+                    if (a_SSAOmap.texture != nullptr)
+                    {
+                        setsToBind.push_back(a_SSAOmap.descriptorSet); // #2
+                    }
+                }
+
+                if (setsToBind.size())
+                {
                     vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pLayout, 0,
                             setsToBind.size(),
                             setsToBind.data(),
@@ -1033,6 +1571,118 @@ class Application
             }
         }
 
+        static void RecordCommandsOfFillingGBuffer(VkFramebuffer a_frameBuffer, VkRenderPass a_renderPass, Pipe a_pipe,
+                VkCommandBuffer a_cmdBuff, const std::unordered_map<std::string, RenderObject>& a_objects, Eye* a_camera)
+        {
+            std::vector<VkClearValue> clearValues(4);
+            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[1].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[2].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[3].depthStencil = { 1.0f, 0 };
+
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass        = a_renderPass;
+            renderPassInfo.framebuffer       = a_frameBuffer;
+            renderPassInfo.renderArea.offset = { 0, 0 };
+            renderPassInfo.renderArea.extent = { (uint32_t)WIDTH, (uint32_t)HEIGHT };
+            renderPassInfo.clearValueCount   = clearValues.size();
+            renderPassInfo.pClearValues      = clearValues.data();
+
+            vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, a_camera, glm::vec3(0.0f), InputCubeTexture{},
+                    InputTexture{}, 0, true);
+
+            vkCmdEndRenderPass(a_cmdBuff);
+        }
+
+        static void RecordCommandsOfSSAOEvaluation(VkDevice a_device, VkRenderPass a_renderPass, VkFramebuffer a_frameBuffer,
+                Mesh a_squareMesh, VkCommandBuffer a_cmdBuffer, Pipe a_pipe, InputAttachments& a_attachments,
+                InputTexture& a_noiceTexture, UniformBuffer& a_ssaoKernel, glm::mat4 a_projMatrix)
+        {
+            std::vector<VkClearValue> clearValues(2);
+            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[1].depthStencil = { 1.0f, 0 };
+
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass        = a_renderPass;
+            renderPassInfo.framebuffer       = a_frameBuffer;
+            renderPassInfo.renderArea.offset = { 0, 0 };
+            renderPassInfo.renderArea.extent = { (uint32_t)WIDTH, (uint32_t)HEIGHT };
+            renderPassInfo.clearValueCount   = clearValues.size();
+            renderPassInfo.pClearValues      = clearValues.data();
+
+            vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_pipe.pipeline);
+
+            std::vector<VkDescriptorSet> setsToBind(0);
+            setsToBind.push_back(a_attachments.gPositionAndDepth.descriptorSet);
+            setsToBind.push_back(a_attachments.gNormals.descriptorSet);
+            setsToBind.push_back(a_noiceTexture.descriptorSet);
+            setsToBind.push_back(a_ssaoKernel.descriptorSet);
+
+            vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_pipe.pipelineLayout, 0,
+                    setsToBind.size(), setsToBind.data(), 0, nullptr);
+
+            VkBuffer vbo{ a_squareMesh.getVBO().buffer };
+            VkBuffer ibo{ a_squareMesh.getIBO().buffer };
+
+            std::vector<VkDeviceSize> offsets{ 0 };
+
+            vkCmdBindVertexBuffers(a_cmdBuffer, 0, 1, &vbo, offsets.data());
+            vkCmdBindIndexBuffer(a_cmdBuffer, ibo, 0, VK_INDEX_TYPE_UINT32);
+
+            PushConstants constants{};
+            constants.projection = a_projMatrix;
+
+            vkCmdPushConstants(a_cmdBuffer, a_pipe.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &constants);
+
+            vkCmdDrawIndexed(a_cmdBuffer, 6, 1, 0, 0, 0);
+
+            vkCmdEndRenderPass(a_cmdBuffer);
+        }
+
+        static void RecordCommandsOfBluringSSAO(VkDevice a_device, VkRenderPass a_renderPass, VkFramebuffer a_frameBuffer,
+                Mesh a_squareMesh, VkCommandBuffer a_cmdBuffer, Pipe a_pipe, InputTexture& a_ssao)
+        {
+            std::vector<VkClearValue> clearValues(2);
+            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[1].depthStencil = { 1.0f, 0 };
+
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass        = a_renderPass;
+            renderPassInfo.framebuffer       = a_frameBuffer;
+            renderPassInfo.renderArea.offset = { 0, 0 };
+            renderPassInfo.renderArea.extent = { (uint32_t)WIDTH, (uint32_t)HEIGHT };
+            renderPassInfo.clearValueCount   = clearValues.size();
+            renderPassInfo.pClearValues      = clearValues.data();
+
+            vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            vkCmdBindPipeline(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_pipe.pipeline);
+
+            std::vector<VkDescriptorSet> setsToBind{ a_ssao.descriptorSet };
+
+            vkCmdBindDescriptorSets(a_cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, a_pipe.pipelineLayout, 0,
+                    setsToBind.size(), setsToBind.data(), 0, nullptr);
+
+            VkBuffer vbo{ a_squareMesh.getVBO().buffer };
+            VkBuffer ibo{ a_squareMesh.getIBO().buffer };
+
+            std::vector<VkDeviceSize> offsets{ 0 };
+
+            vkCmdBindVertexBuffers(a_cmdBuffer, 0, 1, &vbo, offsets.data());
+            vkCmdBindIndexBuffer(a_cmdBuffer, ibo, 0, VK_INDEX_TYPE_UINT32);
+
+            vkCmdDrawIndexed(a_cmdBuffer, 6, 1, 0, 0, 0);
+
+            vkCmdEndRenderPass(a_cmdBuffer);
+        }
+
         static void RecordCommandsToRenderForCubemapFace(VkFramebuffer a_frameBuffer, VkRenderPass a_renderPass, Pipe a_pipe,
                 const uint32_t a_face, VkCommandBuffer a_cmdBuff, const std::unordered_map<std::string, RenderObject>& a_objects,
                 Eye* a_light)
@@ -1053,7 +1703,7 @@ class Application
             vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
             RecordCommandsOfDrawingRenderables(a_objects, a_cmdBuff, &a_pipe, a_light, a_light->position(), InputCubeTexture{},
-                    a_face);
+                    InputTexture{}, a_face, false);
 
             vkCmdEndRenderPass(a_cmdBuff);
         }
@@ -1123,7 +1773,19 @@ class Application
             {
                 RecordCommandsToRenderForCubemapFace(m_framebuffersOffscreen.shadowCubemapFrameBuffer, m_renderPasses.shadowCubemapPass,
                         m_pipes["shadow cubemap"], face, a_cmdBuffer, m_renerables, m_pEyes["light"]);
-                RecordCommandsOfCopyingToCubemapFace(face, a_cmdBuffer, m_attachments.offscreenColor, m_shadowCubemap.shadowCubemap);
+                RecordCommandsOfCopyingToCubemapFace(face, a_cmdBuffer, m_attachments.offscreenColor, m_inputAttachments.shadowCubemap.shadowCubemap);
+            }
+
+            // SSAO
+            {
+                SetViewportAndScissor(a_cmdBuffer, (float)WIDTH, (float)HEIGHT, true);
+                RecordCommandsOfFillingGBuffer(m_framebuffersOffscreen.gBufferCreationFrameBuffer, m_renderPasses.gBufferCreationPass,
+                        m_pipes["g buffer"], a_cmdBuffer, m_renerables, m_pEyes["camera"]);
+                RecordCommandsOfSSAOEvaluation(m_device, m_renderPasses.ssaoPass, m_framebuffersOffscreen.ssaoFrameBuffer, m_meshes["quad"],
+                        a_cmdBuffer, m_pipes["ssao"], m_inputAttachments, m_inputTextures["noise"], m_roUniformBuffers["ssao kernel"],
+                        m_pEyes["camera"]->projection());
+                RecordCommandsOfBluringSSAO(m_device, m_renderPasses.ssaoBlurPass, m_framebuffersOffscreen.ssaoBlurFrameBuffer, m_meshes["quad"],
+                        a_cmdBuffer, m_pipes["blur ssao"], m_inputAttachments.ssao);
             }
 
             VkClearValue colorClear;
@@ -1144,16 +1806,19 @@ class Application
             renderPassInfo.pClearValues      = clearValues.data();
 
             SetViewportAndScissor(a_cmdBuffer, (float)WIDTH, (float)HEIGHT, true);
+
             vkCmdBeginRenderPass(a_cmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
             if (s_shadowmapDebug)
             {
-                RecordCommandsOfShowingCubemap(m_device, m_meshes["debug square"], a_cmdBuffer, &m_pipes["show cubemap"], m_shadowCubemap);
+                RecordCommandsOfShowingCubemap(m_device, m_meshes["quad"], a_cmdBuffer, &m_pipes["show cubemap"], m_inputAttachments.shadowCubemap);
             }
             else
             {
                 RecordCommandsOfDrawingRenderables(m_renerables, a_cmdBuffer, nullptr, m_pEyes["camera"], m_pEyes["light"]->position(),
-                        m_shadowCubemap, 0);
+                        m_inputAttachments.shadowCubemap,
+                        (s_ssaoEnabled) ? m_inputAttachments.blurredSSAO : m_inputTextures["white"],
+                        0, true);
                 RecordCommandsOfDrawingParticleSystems(m_particleSystems, a_cmdBuffer, m_pipes, m_pEyes["camera"]);
             }
 
@@ -1280,6 +1945,49 @@ class Application
                 imgBar = offscreenDepth.makeBarrier(offscreenDepth.wholeImageRange(), 0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
                 offscreenDepth.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
+
+                // SSAO - color attachments
+                Texture& gBufferPD = a_attachments.gPositionAndDepth;
+                gBufferPD.setAddressMode(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+                gBufferPD.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
+                gBufferPD.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32G32B32A32_SFLOAT);
+
+                imgBar = gBufferPD.makeBarrier(gBufferPD.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                gBufferPD.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+                Texture& gBufferN = a_attachments.gNormals;
+                gBufferN.setAddressMode(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+                gBufferN.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
+                gBufferN.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32G32B32A32_SFLOAT);
+
+                imgBar = gBufferN.makeBarrier(gBufferN.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                gBufferN.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+                Texture& gBufferC = a_attachments.gColor;
+                gBufferC.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
+                gBufferC.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32G32B32A32_SFLOAT);
+
+                imgBar = gBufferC.makeBarrier(gBufferC.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                gBufferC.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+                Texture& ssao = a_attachments.ssao;
+                ssao.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
+                ssao.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32_SFLOAT);
+
+                imgBar = ssao.makeBarrier(ssao.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                ssao.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+                Texture& blurredSSAO = a_attachments.blurredSSAO;
+                blurredSSAO.setExtent(VkExtent3D{uint32_t(WIDTH), uint32_t(HEIGHT), 1});
+                blurredSSAO.create(a_device, a_physDevice, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R32_SFLOAT);
+
+                imgBar = blurredSSAO.makeBarrier(blurredSSAO.wholeImageRange(), 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                blurredSSAO.changeImageLayout(cmdBuff, imgBar, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
                 // Final renderpass - depth attachment
                 Texture& presentDepth = a_attachments.presentDepth;
@@ -1533,11 +2241,21 @@ class Application
                 ps.second.cleanup(m_device);
             }
 
-            m_shadowCubemapTexture.cleanup();
+            for (auto& ubo : m_roUniformBuffers)
+            {
+                vkDestroyBuffer(m_device, ubo.second.buffer, nullptr);
+                vkFreeMemory   (m_device, ubo.second.memory, nullptr);
+            }
 
+            m_attachments.shadowCubemap.cleanup();
             m_attachments.presentDepth.cleanup();
             m_attachments.offscreenDepth.cleanup();
             m_attachments.offscreenColor.cleanup();
+            m_attachments.gPositionAndDepth.cleanup();
+            m_attachments.gNormals.cleanup();
+            m_attachments.gColor.cleanup();
+            m_attachments.ssao.cleanup();
+            m_attachments.blurredSSAO.cleanup();
 
             for (auto pipe : m_pipes)
             {
@@ -1546,10 +2264,15 @@ class Application
             }
 
             vkDestroyDescriptorPool(m_device, m_DSPools.textureDSPool, nullptr);
+            vkDestroyDescriptorPool(m_device, m_DSPools.uboDSPool, nullptr);
             vkDestroyDescriptorSetLayout(m_device, m_DSLayouts.textureOnlyLayout, nullptr);
+            vkDestroyDescriptorSetLayout(m_device, m_DSLayouts.uboOnlyLayout, nullptr);
 
             vkDestroyRenderPass(m_device, m_renderPasses.finalRenderPass, nullptr);
             vkDestroyRenderPass(m_device, m_renderPasses.shadowCubemapPass, nullptr);
+            vkDestroyRenderPass(m_device, m_renderPasses.ssaoPass, nullptr);
+            vkDestroyRenderPass(m_device, m_renderPasses.ssaoBlurPass, nullptr);
+            vkDestroyRenderPass(m_device, m_renderPasses.gBufferCreationPass, nullptr);
 
             for (auto& eyePtr : m_pEyes)
             {
@@ -1576,6 +2299,9 @@ class Application
                 vkDestroyFramebuffer(m_device, framebuffer, nullptr);
             }
             vkDestroyFramebuffer(m_device, m_framebuffersOffscreen.shadowCubemapFrameBuffer, nullptr);
+            vkDestroyFramebuffer(m_device, m_framebuffersOffscreen.ssaoFrameBuffer, nullptr);
+            vkDestroyFramebuffer(m_device, m_framebuffersOffscreen.ssaoBlurFrameBuffer, nullptr);
+            vkDestroyFramebuffer(m_device, m_framebuffersOffscreen.gBufferCreationFrameBuffer, nullptr);
 
             for (auto imageView : m_screen.swapChainImageViews) {
                 vkDestroyImageView(m_device, imageView, nullptr);
@@ -1602,7 +2328,8 @@ class Application
         }
 };
 
-bool  Application::s_shadowmapDebug; // "2" binding (normal mode - "1")
+bool Application::s_shadowmapDebug;
+bool Application::s_ssaoEnabled{true};
 
 int main() 
 {

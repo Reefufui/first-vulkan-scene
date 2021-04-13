@@ -18,6 +18,7 @@ class Texture
         uint32_t       m_height{};
         uint32_t       m_width{};
         VkImageAspectFlagBits m_aspect{};
+        VkSamplerAddressMode  m_addressMode{ VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER };
 
     public:
 
@@ -34,6 +35,7 @@ class Texture
         uint32_t        getWidth()        { return m_width; }
 
         void setExtent(VkExtent3D ext) { m_extent = ext; };
+        void setAddressMode(VkSamplerAddressMode mode) { m_addressMode = mode; };
 
         VkImageMemoryBarrier    makeBarrier(VkImageSubresourceRange a_range, VkAccessFlags a_src, VkAccessFlags a_dst, VkImageLayout a_before, VkImageLayout a_after);
 
