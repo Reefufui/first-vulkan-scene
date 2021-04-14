@@ -28,6 +28,7 @@
 
 const int WIDTH     = 1600;
 const int HEIGHT    = 900;
+const int BLOOM_DIM = 360;
 const int CUBE_SIDE = 1000;
 
 class Eye
