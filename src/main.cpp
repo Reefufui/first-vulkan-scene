@@ -513,8 +513,8 @@ class Application
 
             std::cout << "\tcreating descriptor sets...\n";
             CreateTextureOnlyLayout(m_device, &m_DSLayouts.textureOnlyLayout);
-            CreateTextureDescriptorPool(m_device, m_DSPools.textureDSPool, m_textures.size() + 1 + 3 + 2 + 2);
-            // + 1 for cubemap; + 3 for ssao inputs; + 2 for ssao and blurred ssao; +2 for bloom and blurred bloom
+            CreateTextureDescriptorPool(m_device, m_DSPools.textureDSPool, m_textures.size() + 1 + 3 + 2 + 1);
+            // + 1 for cubemap; + 3 for ssao inputs; + 2 for ssao and blurred ssao; +2 for bloom
             CreateDSForEachModelTexture(m_device, &m_DSLayouts.textureOnlyLayout, m_DSPools.textureDSPool, m_inputTextures, m_textures);
             CreateDSForOtherInputAttachments(m_device, &m_DSLayouts.textureOnlyLayout, m_DSPools.textureDSPool, m_inputAttachments, m_attachments);
 
@@ -538,6 +538,8 @@ class Application
                     m_framebuffersOffscreen.gBufferCreationFrameBuffer, m_attachments);
             CreateSSAOFrameBuffer(m_device, m_renderPasses.ssaoPass,
                     m_framebuffersOffscreen.ssaoFrameBuffer, m_attachments);
+            // There is VK_BLEND_OP_MULTIPLY_EXT, but I dont want to enable this VK_EXT_blend_operation_advanced thing
+            // sampling with texelFetch goes brrrrr...
             CreateSSAOBlurFrameBuffer(m_device, m_renderPasses.ssaoPass,
                     m_framebuffersOffscreen.ssaoBlurFrameBuffer, m_attachments);
             CreateShadowCubemapFrameBuffer(m_device, m_renderPasses.shadowCubemapPass,
