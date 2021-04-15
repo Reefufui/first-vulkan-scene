@@ -26,8 +26,9 @@
 #define FOV 70.0f
 #endif
 
-const int WIDTH     = 1600;
-const int HEIGHT    = 900;
+const int WIDTH     = 1280;
+const int HEIGHT    = 720;
+const int BLOOM_DIM = 200;
 const int CUBE_SIDE = 1000;
 
 class Eye
@@ -63,7 +64,7 @@ class Camera : public Eye
 
         glm::vec3 position()
         {
-            glm::vec3 pos{ glm::vec3(4.0f) };
+            glm::vec3 pos{ glm::vec3(4.5f) };
 
             return pos;
         }
@@ -101,7 +102,7 @@ class Light : public Eye
 
         glm::vec3 position()
         {
-            glm::vec3 pos = glm::vec3(4.5f * (float)sin(this->getTime() / 2.0f), 4.5f, 4.5f * (float)cos(this->getTime() / 2.0f));
+            glm::vec3 pos = glm::vec3(4.5f * (float)sin(this->getTime() / 2.0f), 3.0f, 2.5f * (float)cos(this->getTime() / 2.0f));
             //glm::vec3 pos = glm::vec3(-2.0f, 2.5f, 4.0f);
 
             return pos;

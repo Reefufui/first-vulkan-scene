@@ -13,3 +13,7 @@ glslangValidator -V ssao.frag -o ssao.frag.spv
 glslangValidator -V ssao.vert -o ssao.vert.spv
 glslangValidator -V blur.vert -o blur.vert.spv
 glslangValidator -V blur.frag -o blur.frag.spv
+glslangValidator -V bloom.vert -o bloom.vert.spv
+glslangValidator -V bloom.frag -o bloom.frag.spv
+glslangValidator -V gauss.vert -o gauss.vert.spv
+glslangValidator -V gauss.frag -o gauss.frag.spv
