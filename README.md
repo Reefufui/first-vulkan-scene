@@ -6,11 +6,13 @@
 
 ## Controls:
 
-`0` - default mode
+`1` - default mode
 
-`1` - show light source POV
+`2` - show light source POV
 
-`2` - toggle SSAO
+`3` - toggle SSAO
+
+`4` - toggle bloom
 
 ## Implemented:
 
