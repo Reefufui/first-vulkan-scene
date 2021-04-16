@@ -1,8 +1,4 @@
-## Trivial install & run:
-
-`git clone --recursive https://github.com/Reefufui/vulkan_shadow_map.git`
-
-`sh run.sh`
+![](image.png)
 
 ## Controls:
 
@@ -16,17 +12,13 @@
 
 ## Implemented:
 
-База
-
-Карта теней
+Shadow cubemap (omni shadowing)
 
 PCF
-
-Тени от источника во все стороны (при помощи кубических текстурных карт)
 
 SSAO
 
 Bloom
 
-Реализация источника света в виде системы частиц (огонь)
+Fire particle system
 
